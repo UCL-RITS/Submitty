@@ -138,7 +138,9 @@ bool system_program(const std::string &program, std::string &full_path_executabl
 
     // for Debugging
     { "strace",                  "/usr/bin/strace" },
-    
+
+    // whitelist bash to run the commands for now
+    { "bash",                    "/bin/bash"},
     //Matlab
     { "matlab",                  "/usr/local/bin/matlab" }
 
