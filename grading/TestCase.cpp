@@ -355,7 +355,7 @@ const nlohmann::json TestCase::get_test_case_limits() const {
     // 10 seconds was sufficient time to compile most Data Structures
     // homeworks, but some submissions required slightly more time
     adjust_test_case_limits(_test_case_limits,RLIMIT_CPU,60);              // 60 seconds
-    adjust_test_case_limits(_test_case_limits,RLIMIT_FSIZE,10*1000*1000);  // 10 MB executable
+    adjust_test_case_limits(_test_case_limits,RLIMIT_FSIZE,50*1000*1000);  // 50 MB executable
 
     adjust_test_case_limits(_test_case_limits,RLIMIT_RSS,1000*1000*1000);  // 1 GB
   }
