@@ -35,6 +35,7 @@ class Container():
         self.is_server = container_info['server']
         self.outgoing_connections = container_info['outgoing_connections']
         self.container_rlimits = container_info['container_rlimits']
+        self.internet = container_info.get('use_internet', False)
         self.container_grading_time = 0
         # If we are in production, we need to run as an untrusted user inside of
         # our docker container.
@@ -74,6 +75,12 @@ class Container():
             }
         }
 
+        network_details = {
+            'network': None if self.internet else 'none',
+            'network_mode': 'host' if self.internet else None,
+
+        }
+
         # Only pass container name to testcases with greater than one container.
         # (Doing otherwise breaks compilation)
         container_name_argument = ['--container_name', self.name] if more_than_one else []
@@ -86,7 +93,7 @@ class Container():
                     self.image,
                     stdin_open=True,
                     tty=True,
-                    network='none',
+                    **network_details,
                     volumes=mount,
                     working_dir=self.directory,
                     name=self.full_name
@@ -103,7 +110,7 @@ class Container():
                     ulimits=container_ulimits,
                     stdin_open=True,
                     tty=True,
-                    network='none',
+                    **network_details,
                     user=self.container_user_argument,
                     volumes=mount,
                     working_dir=self.directory,
@@ -125,6 +132,7 @@ class Container():
             self.container.short_id,
             timer() - container_create_time
         )
+        self.log_meta('USING network', str(network_details['network_mode']), self.container.short_id, timer() - container_create_time)
         client.close()
 
     def start(self, logfile):
@@ -384,7 +392,7 @@ class ContainerNetwork(secure_execution_environment.SecureExecutionEnvironment):
             network_name,
             driver='bridge',
             ipam=ipam_config,
-            internal=True
+            #internal=True
         )
         client.close()
 
