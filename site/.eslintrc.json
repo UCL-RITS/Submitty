@@ -15,6 +15,7 @@
         "sourceType": "script"
     },
     "rules": {
+        "eqeqeq": ["error", "always"],
         "arrow-spacing": ["error"],
         "block-spacing": ["error"],
         "brace-style": ["error", "stroustrup"],
@@ -24,6 +25,7 @@
         "eol-last": ["error"],
         "indent": ["error", 4, {"SwitchCase": 1}],
         "keyword-spacing": ["error", {"before": true, "after": true}],
+        "space-before-blocks": ["error", "always"],
         "linebreak-style": ["error", "unix"],
         "no-trailing-spaces": ["error"],
         "no-var": ["error"],
@@ -49,12 +51,13 @@
                 "plugin:@typescript-eslint/eslint-recommended",
                 "plugin:@typescript-eslint/recommended"
             ],
-            "parserOptions":{
-                "sourceType": "module"
-            },
             "parser": "@typescript-eslint/parser",
             "parserOptions": {
+                "sourceType": "module",
                 "project" : "./tsconfig.json"
+            },
+            "rules" : {
+                "@typescript-eslint/no-non-null-assertion" : "off"
             }
         },
         {
@@ -71,7 +74,7 @@
             }
         },
         {
-            "files": ["jest.config.js"],
+            "files": ["jest.config.*js"],
             "env": {
                 "node": true
             }

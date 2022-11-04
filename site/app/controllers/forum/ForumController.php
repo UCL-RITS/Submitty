@@ -10,6 +10,7 @@ use app\libraries\Utils;
 use app\libraries\FileUtils;
 use app\libraries\DateUtils;
 use app\libraries\routers\AccessControl;
+use app\libraries\routers\Enabled;
 use app\libraries\response\JsonResponse;
 use Symfony\Component\Routing\Annotation\Route;
 
@@ -18,6 +19,8 @@ use Symfony\Component\Routing\Annotation\Route;
  *
  * Controller to deal with the submitty home page. Once the user has been authenticated, but before they have
  * selected which course they want to access, they are forwarded to the home page.
+ *
+ * @Enabled("forum")
  */
 class ForumController extends AbstractController {
     /**
@@ -571,6 +574,12 @@ class ForumController extends AbstractController {
         if (!$this->core->getAccess()->canI("forum.modify_post", ['post_author' => $post['author_user_id']])) {
                 return $this->core->getOutput()->renderJsonFail('You do not have permissions to do that.');
         }
+        if (isset($_POST['thread_id']) && $post['thread_id'] !== intval($_POST['thread_id'])) {
+            return $this->core->getOutput()->renderJsonFail("You do not have permission to do that.");
+        }
+        if (isset($_POST['edit_thread_id']) && $post['thread_id'] !== intval($_POST['edit_thread_id'])) {
+            return $this->core->getOutput()->renderJsonFail("You do not have permission to do that.");
+        }
         if (!empty($_POST['edit_thread_id']) && $this->core->getQueries()->isThreadLocked($_POST['edit_thread_id']) && !$this->core->getUser()->accessAdmin()) {
             return $this->core->getOutput()->renderJsonFail('Thread is locked');
         }
@@ -914,7 +923,19 @@ class ForumController extends AbstractController {
      */
     public function getSingleThread() {
         $thread_id = $_POST['thread_id'];
+        // Checks if thread id is empty. If so, render "fail" json response case informing that thread id is empty.
+        if (empty($thread_id)) {
+            return $this->core->getOutput()->renderJsonFail("Invalid thread id (EMPTY ID)");
+        }
+        // Checks if thread id is not an integer value. If so, render "fail" json response case informing that thread id is not an integer value.
+        if (!(is_int($thread_id) || ctype_digit($_POST['thread_id']))) {
+            return $this->core->getOutput()->renderJsonFail("Invalid thread id (NON-INTEGER ID)");
+        }
         $thread = $this->core->getQueries()->getThread($thread_id);
+        // Checks if no threads were found. If so, render "fail" json response case informing that the no threads were found with the given ID.
+        if (!(count($thread) > 0)) {
+            return $this->core->getOutput()->renderJsonFail("Invalid thread id (NON-EXISTENT ID)");
+        }
         $categories_ids = $this->core->getQueries()->getCategoriesIdForThread($thread_id);
         $show_deleted = $this->showDeleted();
         $currentCourse = $this->core->getConfig()->getCourse();
@@ -953,7 +974,6 @@ class ForumController extends AbstractController {
      * @Route("/courses/{_semester}/{_course}/forum/threads/{thread_id}", methods={"GET", "POST"}, requirements={"thread_id": "\d+"})
      */
     public function showThreads($thread_id = null, $option = 'tree') {
-
         $user = $this->core->getUser()->getId();
         $currentCourse = $this->core->getConfig()->getCourse();
         $category_id = in_array('thread_category', $_POST) ? [$_POST['thread_category']] : [];
@@ -1105,8 +1125,9 @@ class ForumController extends AbstractController {
         $anon = $current_post["anonymous"];
         foreach ($older_posts as $post) {
             $_post['user'] = !$this->modifyAnonymous($oc) && $oc == $post["edit_author"] && $anon ? '' : $post["edit_author"];
-            $_post['content'] = $return = $this->core->getOutput()->renderTwigTemplate("forum/RenderPost.twig", [
-                "post_content" => $post["content"]
+            $_post['content'] = $this->core->getOutput()->renderTwigTemplate("forum/RenderPost.twig", [
+                "post_content" => $post["content"],
+                "render_markdown" => false,
             ]);
             $_post['post_time'] = DateUtils::parseDateTime($post['edit_timestamp'], $this->core->getConfig()->getTimezone())->format("n/j g:i A");
             $output[] = $_post;
@@ -1114,8 +1135,9 @@ class ForumController extends AbstractController {
         if (count($output) == 0) {
             // Current post
             $_post['user'] = !$this->modifyAnonymous($oc) && $anon ? '' : $oc;
-            $_post['content'] = $return = $this->core->getOutput()->renderTwigTemplate("forum/RenderPost.twig", [
-                "post_content" => $current_post["content"]
+            $_post['content'] = $this->core->getOutput()->renderTwigTemplate("forum/RenderPost.twig", [
+                "post_content" => $current_post["content"],
+                "render_markdown" => false,
             ]);
             $_post['post_time'] = DateUtils::parseDateTime($current_post['timestamp'], $this->core->getConfig()->getTimezone())->format("n/j g:i A");
             $output[] = $_post;

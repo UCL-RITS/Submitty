@@ -9,10 +9,14 @@ use app\libraries\response\JsonResponse;
 use app\libraries\response\RedirectResponse;
 use Symfony\Component\Routing\Annotation\Route;
 use app\libraries\routers\AccessControl;
+use app\libraries\routers\Enabled;
 use app\libraries\FileUtils;
 use app\libraries\Utils;
 use app\libraries\PollUtils;
 
+/**
+ * @Enabled("polls")
+ */
 class PollController extends AbstractController {
     public function __construct(Core $core) {
         parent::__construct($core);
@@ -60,7 +64,7 @@ class PollController extends AbstractController {
      * @Route("/courses/{_semester}/{_course}/polls/viewPoll/{poll_id}", methods={"GET"}, requirements={"poll_id": "\d*", })
      * @return MultiResponse
      */
-    public function showPoll($poll_id) {
+    public function viewPoll($poll_id) {
         if (!isset($poll_id)) {
             $this->core->addErrorMessage("Invalid Poll ID");
             return MultiResponse::RedirectOnlyResponse(
@@ -74,24 +78,13 @@ class PollController extends AbstractController {
                 new RedirectResponse($this->core->buildCourseUrl(['polls']))
             );
         }
-        if ($this->core->getUser()->accessAdmin()) {
-            return MultiResponse::webOnlyResponse(
-                new WebResponse(
-                    'Poll',
-                    'showPollInstructor',
-                    $poll
-                )
-            );
-        }
-        else {
-            return MultiResponse::webOnlyResponse(
-                new WebResponse(
-                    'Poll',
-                    'showPollStudent',
-                    $poll
-                )
-            );
-        }
+        return MultiResponse::webOnlyResponse(
+            new WebResponse(
+                'Poll',
+                'viewPoll',
+                $poll
+            )
+        );
     }
 
     /**
@@ -531,45 +524,6 @@ class PollController extends AbstractController {
         }
         $this->core->getQueries()->deletePoll($_POST["poll_id"]);
         return new RedirectResponse($this->core->buildCourseUrl(['polls']));
-    }
-
-    /**
-     * @Route("/courses/{_semester}/{_course}/polls/viewResults/{poll_id}", methods={"GET"}, requirements={"poll_id": "\d*", })
-     * @return MultiResponse
-     */
-    public function viewResults($poll_id) {
-        if (!isset($poll_id)) {
-            $this->core->addErrorMessage("Invalid Poll ID");
-            return MultiResponse::RedirectOnlyResponse(
-                new RedirectResponse($this->core->buildCourseUrl(['polls']))
-            );
-        }
-
-        $poll = $this->core->getQueries()->getPoll($poll_id);
-
-        if ($poll == null) {
-            $this->core->addErrorMessage("Invalid Poll ID");
-            return MultiResponse::RedirectOnlyResponse(
-                new RedirectResponse($this->core->buildCourseUrl(['polls']))
-            );
-        }
-
-        if (!$this->core->getUser()->accessAdmin() && !$poll->isHistogramAvailable()) {
-            return MultiResponse::RedirectOnlyResponse(
-                new RedirectResponse($this->core->buildCourseUrl(['polls']))
-            );
-        }
-
-        $results = $this->core->getQueries()->getResults($poll_id);
-
-        return MultiResponse::webOnlyResponse(
-            new WebResponse(
-                'Poll',
-                'viewResults',
-                $poll,
-                $results
-            )
-        );
     }
 
     /**

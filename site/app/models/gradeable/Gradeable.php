@@ -52,14 +52,13 @@ use app\controllers\admin\AdminGradeableController;
  * @method int getTeamSizeMax()
  * @method \DateTime getTeamLockDate()
  * @method bool isTaGrading()
- * @method bool isScannedExam()
- * @method void setScannedExam($scanned_exam)
  * @method bool isStudentView()
  * @method void setStudentView($can_student_view)
  * @method bool isStudentViewAfterGrades()
  * @method void setStudentViewAfterGrades($can_student_view_after_grades)
  * @method bool isStudentSubmit()
  * @method void setStudentSubmit($can_student_submit)
+ * @method void setStudentDownload($can_student_download)
  * @method void setPeerGrading($use_peer_grading)
  * @method int getPeerGradeSet()
  * @method void setPeerGradeSet($grade_set)
@@ -184,13 +183,13 @@ class Gradeable extends AbstractModel {
     protected $team_size_max = 0;
     /** @prop @var bool If the gradeable is using any manual grading */
     protected $ta_grading = true;
-    /** @prop @var bool If the gradeable is a 'scanned exam' */
-    protected $scanned_exam = false;
     /** @prop @var bool If students can view submissions */
     protected $student_view = false;
     /** @prop @var bool If students can only view submissions after grades released date */
     protected $student_view_after_grades = false;
-    /** @prop @var bool If students can make submissions */
+    /** @prop @var bool If students can download submission files */
+    protected $student_download = false;
+    /** @prop @var bool If students can make submissions and view other versions */
     protected $student_submit = false;
     /** @prop @var int The number of peers each student will be graded by */
     protected $peer_grade_set = 0;
@@ -288,16 +287,16 @@ class Gradeable extends AbstractModel {
         }
 
         if ($this->getType() === GradeableType::ELECTRONIC_FILE) {
-            $this->setAutogradingConfigPath($details['autograding_config_path']);
+            $this->setAutogradingConfigPath($details['autograding_config_path'], true);
             $this->setVcs($details['vcs']);
             $this->setVcsSubdirectory($details['vcs_subdirectory']);
             $this->setVcsHostType($details['vcs_host_type']);
             $this->setTeamAssignmentInternal($details['team_assignment']);
             $this->setTeamSizeMax($details['team_size_max']);
             $this->setTaGradingInternal($details['ta_grading']);
-            $this->setScannedExam($details['scanned_exam']);
             $this->setStudentView($details['student_view']);
             $this->setStudentViewAfterGrades($details['student_view_after_grades']);
+            $this->setStudentDownload($details['student_download']);
             $this->setStudentSubmit($details['student_submit']);
             $this->setHasDueDate($details['has_due_date']);
             $this->setHasReleaseDate($details['has_release_date']);
@@ -569,6 +568,7 @@ class Gradeable extends AbstractModel {
     }
     public function setPeerGradersList($input) {
         $bad_rows = [];
+        $self_grade_rows = [];
         foreach ($input as $row_num => $vals) {
             if ($this->core->getQueries()->getUserById($vals["student"]) === null) {
                 array_push($bad_rows, ($vals["student"]));
@@ -576,13 +576,25 @@ class Gradeable extends AbstractModel {
             if ($this->core->getQueries()->getUserById($vals["grader"]) === null) {
                 array_push($bad_rows, ($vals["grader"]));
             }
+            if ($vals["grader"] === $vals["student"]) {
+                array_push($self_grade_rows, ($vals["grader"]));
+            }
         }
-        if (!empty($bad_rows)) {
-            $msg = "The given user id is not valid: ";
-            array_walk($bad_rows, function ($val) use (&$msg) {
-                $msg .= " {$val}";
-            });
-            $this->core->addErrorMessage($msg);
+        if (!empty($bad_rows) || !empty($self_grade_rows)) {
+            if (!empty($bad_rows)) {
+                $bad_row_msg = "The given user id is not valid: ";
+                array_walk($bad_rows, function ($val) use (&$bad_row_msg) {
+                    $bad_row_msg .= " {$val}";
+                });
+                $this->core->addErrorMessage($bad_row_msg);
+            }
+            if (!empty($self_grade_rows)) {
+                $self_grade_msg = "The given users have self gradings: ";
+                array_walk($self_grade_rows, function ($val) use (&$self_grade_msg) {
+                    $self_grade_msg .= " {$val}";
+                });
+                $this->core->addErrorMessage($self_grade_msg);
+            }
         }
         else {
             $query_string = "";
@@ -624,7 +636,7 @@ class Gradeable extends AbstractModel {
     }
 
     public function getPeerFeedback($grader_id, $anon_id) {
-        $user_id = $this->core->getQueries()->getSubmitterIdFromAnonId($anon_id);
+        $user_id = $this->core->getQueries()->getSubmitterIdFromAnonId($anon_id, $this->getId());
         $feedback = $this->core->getQueries()->getPeerFeedbackInstance($this->getId(), $grader_id, $user_id);
         if ($feedback == 'thanks') {
             return 'Thank you!';
@@ -900,6 +912,23 @@ class Gradeable extends AbstractModel {
         }
         $date_strings['late_days'] = strval($this->late_days);
         return $date_strings;
+    }
+
+    /**
+     * Gets if the submitted files for this gradeable can be downloaded by students
+     * @return bool
+     */
+    public function canStudentDownload() {
+        return $this->student_download;
+    }
+
+    /**
+     * Gets if this gradeable is defined as a "bulk upload" gradeable (if students are only allowed to view it after
+     * grades are released)
+     * @return bool
+     */
+    public function isBulkUpload() {
+        return $this->isStudentView() && $this->isStudentViewAfterGrades();
     }
 
     /**
@@ -1258,12 +1287,153 @@ class Gradeable extends AbstractModel {
     }
 
     /**
+     * Given a file or directory it will validate if it can be read for autograding
+     *
+     * @param string $path
+     * @param array $group_map
+     * @param array $user_map
+     * @param bool $dir
+     * @return bool
+     */
+    private function checkValidPerms(string $path, array &$group_map, array &$user_map, bool $dir = false): bool {
+        $perms = @fileperms($path);
+        if ($perms === false) {
+            return false;
+        }
+        if ($perms & 0x0004) { // World readable check
+            if (($dir && ($perms & 0x0001)) || !$dir) { // World executable check if dir
+                return true;
+            }
+        }
+
+        $user = $this->core->getUser()->getId();
+        $group_id = @filegroup($path);
+        if ($group_id === false) {
+            return false;
+        }
+        if (!in_array($group_id, $group_map)) {
+            $group_map[$group_id] = posix_getgrgid($group_id)["members"];
+        }
+        $group_users = $group_map[$group_id];
+
+        $group_readable = false;
+
+        if ($perms & 0x0020) { // Group readable check
+            if (($dir && ($perms & 0x0008)) || !$dir) { // Group executable check if dir
+                $group_readable = true;
+            }
+        }
+
+        $instructor_check = in_array($user, $group_users) && $group_readable;
+        $submitty_daemon_check = in_array("submitty_daemon", $group_users) && $group_readable;
+
+        $owner_id = @fileowner($path);
+        if ($owner_id === false) {
+            return false;
+        }
+        if (!array_key_exists($owner_id, $user_map)) {
+            $user_map[$owner_id] = posix_getpwuid($owner_id)["name"];
+        }
+        $owner = $user_map[$owner_id];
+
+        $owner_readable = false;
+
+        if ($perms & 0x0100) {  // Owner readable check
+            if (($dir && ($perms & 0x0040)) || !$dir) { // Owner executable check if dir
+                $owner_readable = true;
+            }
+        }
+
+        if ($owner === "submitty_daemon") {
+            $submitty_daemon_check = $submitty_daemon_check || $owner_readable;
+        }
+
+        if ($owner === $user) {
+            $instructor_check = $instructor_check || $owner_readable;
+        }
+
+        if ($instructor_check && $submitty_daemon_check) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Returns true if the path and all subdirectories/files are valid
+     * Returns a string if there was an error found
+     *
+     * @param string $path
+     * @return bool | string
+     */
+    private function checkPath(string $path) {
+        if (!is_readable($path)) {
+            return "Cannot read provided path.";
+        }
+        $group_map = [];
+        $user_map = [];
+        $dir = @scandir($path);
+        if (!is_array($dir)) {
+            return "Path provided is not a directory.";
+        }
+        // If the folder doesn't contain config.json then definitely isn't a valid path
+        if (!in_array("config.json", $dir)) {
+            return "Path provided does not contain a config.json.";
+        }
+        $cur_paths = [$path];
+        $next_paths = [];
+        $checked_paths = 1;
+        while ($checked_paths <= 1000 && count($cur_paths) !== 0) {
+            foreach ($cur_paths as $cur_path) {
+                $is_dir = is_dir($cur_path);
+                if (!$this->checkValidPerms($cur_path, $group_map, $user_map, $is_dir)) {
+                    return "Invalid permissions on a file or directory within specified path.";
+                }
+                if ($is_dir) {
+                    $next_paths_tmp = @scandir($cur_path);
+                    if (!is_array($next_paths_tmp)) {
+                        return "Invalid permissions on a file or directory within specified path.";
+                    }
+                    foreach ($next_paths_tmp as $next_path) {
+                        if ($next_path === "." || $next_path === "..") {
+                            continue;
+                        }
+                        $next_paths[] = FileUtils::joinPaths($cur_path, $next_path);
+                        $checked_paths++;
+                        if ($checked_paths >= 1000) {
+                            break;
+                        }
+                    }
+                    if ($checked_paths >= 1000) {
+                        break;
+                    }
+                }
+            }
+            $cur_paths = $next_paths;
+            $next_paths = [];
+        }
+
+        if ($checked_paths >= 1000) {
+            return "Path provided contains too many files.";
+        }
+
+        return true;
+    }
+
+    /**
      * Sets the path to the autograding config
      * @param string $path Must not be blank
      */
-    public function setAutogradingConfigPath($path) {
+    public function setAutogradingConfigPath($path, $skip_path_check = false) {
         if ($path === '') {
             throw new \InvalidArgumentException('Autograding configuration file path cannot be blank');
+        }
+        if (!$skip_path_check) {
+            $check = $this->checkPath($path);
+            if (!$this->core->isTesting() && is_string($check)) {
+                // String means an error was found
+                throw new \InvalidArgumentException($check);
+            }
         }
         $this->autograding_config_path = strval($path);
         $this->modified = true;
