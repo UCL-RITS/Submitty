@@ -4,6 +4,8 @@ namespace app\controllers\grading;
 
 use app\libraries\DateUtils;
 use app\libraries\DiffViewer;
+use app\libraries\GradeableType;
+use app\libraries\response\RedirectResponse;
 use app\libraries\routers\AccessControl;
 use app\models\gradeable\Component;
 use app\models\gradeable\Gradeable;
@@ -227,12 +229,17 @@ class ElectronicGraderController extends AbstractController {
         $number_to_grade = $_POST['number_to_grade'] ?? '';
         if (!is_numeric($number_to_grade)) {
             $this->core->addErrorMessage("Peer assignment failed: An invalid number of students to grade was assigned");
-            return JsonResponse::getFailResponse("Number to grade wasn't an integer");
+            return JsonResponse::getFailResponse("Number of students to grade expects an integer");
         }
         $gradeable = $this->tryGetGradeable($gradeable_id);
         if ($gradeable === false) {
             $this->core->addErrorMessage('Invalid Gradeable!');
-            $this->core->redirect($this->core->buildCourseUrl());
+            return JsonResponse::getFailResponse("Invalid gradeable ID");
+        }
+        // Make sure this gradeable is an electronic file gradeable
+        if ($gradeable->getType() !== GradeableType::ELECTRONIC_FILE) {
+            $this->core->addErrorMessage('This gradeable is not an electronic file gradeable');
+            return JsonResponse::getFailResponse('This gradeable is not an electronic file gradeable');
         }
         /* If Restrict to Registration checkbox is checked, then the randomised peer assignments should be restricted to each registration section" */
         if ($restrict_to_registration) {
@@ -354,6 +361,12 @@ class ElectronicGraderController extends AbstractController {
             return;
         }
 
+        // Make sure this gradeable is an electronic file gradeable
+        if ($gradeable->getType() !== GradeableType::ELECTRONIC_FILE) {
+            $this->core->getOutput()->renderJsonFail('This gradeable is not an electronic file gradeable');
+            return;
+        }
+
         // Get the graded gradeable
         $graded_gradeable = $this->tryGetGradedGradeable($gradeable, $who_id);
         if ($graded_gradeable === false) {
@@ -418,8 +431,13 @@ class ElectronicGraderController extends AbstractController {
         if ($gradeable === false) {
             return;
         }
+        // Make sure this gradeable is an electronic file gradeable
+        if ($gradeable->getType() !== GradeableType::ELECTRONIC_FILE) {
+            $this->core->getOutput()->renderJsonFail('This gradeable is not an electronic file gradeable');
+            return;
+        }
         // Get user id from the anon id
-        $submitter_id = $this->tryGetSubmitterIdFromAnonId($anon_id);
+        $submitter_id = $this->tryGetSubmitterIdFromAnonId($anon_id, $gradeable_id);
         if ($submitter_id === false) {
             return;
         }
@@ -480,12 +498,19 @@ class ElectronicGraderController extends AbstractController {
     /**
      * Shows statistics for the grading status of a given electronic submission. This is shown to all full access
      * graders. Limited access graders will only see statistics for the sections they are assigned to.
+     * @AccessControl(role="LIMITED_ACCESS_GRADER")
      * @Route("/courses/{_semester}/{_course}/gradeable/{gradeable_id}/grading/status")
      */
     public function showStatus($gradeable_id) {
         $gradeable = $this->tryGetGradeable($gradeable_id, false);
         if ($gradeable === false) {
             $this->core->addErrorMessage('Invalid gradeable id');
+            $this->core->redirect($this->core->buildCourseUrl());
+        }
+
+        // Make sure this gradeable is an electronic file gradeable
+        if ($gradeable->getType() !== GradeableType::ELECTRONIC_FILE) {
+            $this->core->addErrorMessage('This gradeable is not an electronic file gradeable');
             $this->core->redirect($this->core->buildCourseUrl());
         }
 
@@ -837,7 +862,7 @@ class ElectronicGraderController extends AbstractController {
      * Shows the list of submitters
      * @Route("/courses/{_semester}/{_course}/gradeable/{gradeable_id}/grading/details")
      */
-    public function showDetails($gradeable_id, $sort = "id", $direction = "ASC") {
+    public function showDetails(string $gradeable_id, string $direction = "ASC") {
         // Default is viewing your sections
         // Limited grader does not have "View All" option
         // If nothing to grade, Instructor will see all sections
@@ -849,6 +874,10 @@ class ElectronicGraderController extends AbstractController {
             $this->core->redirect($this->core->buildCourseUrl());
         }
 
+        if ($gradeable->getType() !== GradeableType::ELECTRONIC_FILE) {
+            return new RedirectResponse($this->core->buildCourseUrl(['gradeable', $gradeable->getId(), 'grading']));
+        }
+
         $gradeableUrl = $this->core->buildCourseUrl(['gradeable', $gradeable->getId(), 'grading', 'details']);
         $this->core->getOutput()->addBreadcrumb("{$gradeable->getTitle()} Grading", $gradeableUrl);
 
@@ -858,6 +887,7 @@ class ElectronicGraderController extends AbstractController {
             $this->core->redirect($this->core->buildCourseUrl());
         }
         $anon_mode = isset($_COOKIE['anon_mode']) && $_COOKIE['anon_mode'] === 'on';
+        $sort = isset($_COOKIE['sort']) ? $_COOKIE['sort'] : 'id';
 
         //Checks to see if the Grader has access to all users in the course,
         //Will only show the sections that they are graders for if not TA or Instructor
@@ -933,7 +963,27 @@ class ElectronicGraderController extends AbstractController {
         $show_export_teams_button = $show_edit_teams && (count($all_teams) == count($empty_teams));
         $past_grade_start_date = $gradeable->getDates()['grade_start_date'] < $this->core->getDateTimeNow();
 
-        $this->core->getOutput()->renderOutput(['grading', 'ElectronicGrader'], 'detailsPage', $gradeable, $graded_gradeables, $teamless_users, $graders, $empty_teams, $show_all_sections_button, $show_import_teams_button, $show_export_teams_button, $show_edit_teams, $past_grade_start_date, $view_all, $sort, $direction, $anon_mode);
+        $rawOverrides = $this->core->getQueries()->getRawUsersWithOverriddenGrades($gradeable->getId());
+        $overrides = [];
+        foreach ($rawOverrides as $o) {
+            $overrides[] = $o['user_id'];
+        }
+
+        $rawAnonIds = $this->core->getQueries()->getAllAnonIdsByGradeableWithUserIds($gradeable->getId());
+        if ($gradeable->isTeamAssignment()) {
+            $rawAnonIds = array_merge($rawAnonIds, $this->core->getQueries()->getAllTeamAnonIdsByGradeable($gradeable->getId()));
+        }
+        $anon_ids = [];
+        foreach ($rawAnonIds as $anon) {
+            if (key_exists('team_id', $anon)) {
+                $anon_ids[$anon['team_id']] = $anon['anon_id'];
+            }
+            else {
+                $anon_ids[$anon['user_id']] = $anon['anon_id'];
+            }
+        }
+
+        $this->core->getOutput()->renderOutput(['grading', 'ElectronicGrader'], 'detailsPage', $gradeable, $graded_gradeables, $teamless_users, $graders, $empty_teams, $show_all_sections_button, $show_import_teams_button, $show_export_teams_button, $show_edit_teams, $past_grade_start_date, $view_all, $sort, $direction, $anon_mode, $overrides, $anon_ids);
 
         if ($show_edit_teams) {
             $all_reg_sections = $this->core->getQueries()->getRegistrationSections();
@@ -958,6 +1008,207 @@ class ElectronicGraderController extends AbstractController {
     }
 
     /**
+     * Get attachments for a gradeable
+     * @Route("/courses/{_semester}/{_course}/gradeable/{gradeable_id}/grading/attachments", methods={"GET"})
+     */
+    public function ajaxGetAttachments($gradeable_id) {
+        $anon_id = $_POST['anon_id'] ?? '';
+        $grader_id = $_POST['grader_id'] ?? '';
+
+        $grader = $this->core->getQueries()->getUserById($grader_id);
+        if ($grader === null) {
+            $this->core->getOutput()->renderJsonFail('Insufficient permissions to get attachments.');
+            return;
+        }
+        $gradeable = $this->tryGetGradeable($gradeable_id);
+        if ($gradeable === false) {
+            $this->core->getOutput()->renderJsonFail('Insufficient permissions to get attachments.');
+            return;
+        }
+        // Make sure this gradeable is an electronic file gradeable
+        if ($gradeable->getType() !== GradeableType::ELECTRONIC_FILE) {
+            $this->core->getOutput()->renderJsonFail('This gradeable is not an electronic file gradeable');
+            return;
+        }
+        $submitter_id = $this->tryGetSubmitterIdFromAnonId($anon_id, $gradeable_id);
+        if ($submitter_id === false) {
+            $this->core->getOutput()->renderJsonFail('Insufficient permissions to get attachments.');
+            return;
+        }
+        $graded_gradeable = $this->tryGetGradedGradeable($gradeable, $submitter_id);
+        if ($graded_gradeable === false) {
+            $this->core->getOutput()->renderJsonFail('Insufficient permissions to get attachments.');
+            return;
+        }
+
+        // checks if user has permission
+        if (!$this->core->getAccess()->canI("path.read.attachments", ["gradeable" => $gradeable, "graded_gradeable" => $graded_gradeable])) {
+            $this->core->getOutput()->renderJsonFail('Insufficient permissions to get attachments.');
+            return;
+        }
+
+        $ta_graded_gradeable = $graded_gradeable->getTaGradedGradeable();
+
+        if ($ta_graded_gradeable !== null) {
+            $this->core->getOutput()->renderJsonSuccess($ta_graded_gradeable->getAttachments($grader));
+        }
+        else {
+            $this->core->getOutput()->renderJsonSuccess([]);
+        }
+    }
+
+    /**
+     * Upload an attachment for a grader
+     * @Route("/courses/{_semester}/{_course}/gradeable/{gradeable_id}/grading/attachments/upload", methods={"POST"})
+     */
+    public function uploadAttachment($gradeable_id) {
+        $anon_id = $_POST['anon_id'] ?? '';
+
+        //Get the user uploading attachment
+        $grader = $this->core->getUser();
+        if (!$grader->accessGrading()) {
+            $this->core->getOutput()->renderJsonFail('Insufficient permissions to upload attachments.');
+            return;
+        }
+
+        // Get the gradeable
+        $gradeable = $this->tryGetGradeable($gradeable_id);
+        if ($gradeable === false) {
+            $this->core->getOutput()->renderJsonFail('Insufficient permissions to upload attachments.');
+            return;
+        }
+
+        // Make sure this gradeable is an electronic file gradeable
+        if ($gradeable->getType() !== GradeableType::ELECTRONIC_FILE) {
+            $this->core->getOutput()->renderJsonFail('This gradeable is not an electronic file gradeable');
+            return;
+        }
+
+        // Get user id from the anon id
+        $submitter_id = $this->tryGetSubmitterIdFromAnonId($anon_id, $gradeable_id);
+        if ($submitter_id === false) {
+            $this->core->getOutput()->renderJsonFail('Insufficient permissions to upload attachments.');
+            return;
+        }
+
+        // Get the graded gradeable
+        $graded_gradeable = $this->tryGetGradedGradeable($gradeable, $submitter_id);
+        if ($graded_gradeable === false) {
+            $this->core->getOutput()->renderJsonFail('Insufficient permissions to upload attachments.');
+            return;
+        }
+
+        // Check access
+        if (!$this->core->getAccess()->canI("path.write.attachments", ["gradeable" => $gradeable, "graded_gradeable" => $graded_gradeable])) {
+            $this->core->getOutput()->renderJsonFail('Insufficient permissions to upload attachments.');
+            return;
+        }
+
+        if (empty($_FILES) || empty($_FILES['attachment']) || empty($_FILES['attachment']['tmp_name'])) {
+            $this->core->getOutput()->renderJsonFail('Missing attachment to save.');
+            return;
+        }
+
+        $attachment = $_FILES['attachment'];
+        $status = FileUtils::validateUploadedFiles($attachment);
+        if (!$status[0]["success"]) {
+            $this->core->getOutput()->renderJsonFail('Failed to validate upload: ' . $status[0]["error"]);
+            return;
+        }
+        $attachment_path_folder = FileUtils::joinPaths($this->core->getConfig()->getCoursePath(), 'attachments', $gradeable->getId(), $submitter_id, $grader->getId());
+        FileUtils::createDir($attachment_path_folder, true);
+        $attachment_path = FileUtils::joinPaths($attachment_path_folder, $attachment['name']);
+        if (!move_uploaded_file($attachment["tmp_name"], $attachment_path)) {
+            $this->core->getOutput()->renderJsonFail('Failed to upload file.');
+        }
+        else {
+            // Get the TA graded gradeable
+            $ta_graded_gradeable = $graded_gradeable->getOrCreateTaGradedGradeable();
+
+            // New info, so reset the user viewed date
+            $ta_graded_gradeable->resetUserViewedDate();
+
+            // Finally, save the changes to the database
+            $this->core->getQueries()->saveTaGradedGradeable($ta_graded_gradeable);
+            $submitter = $ta_graded_gradeable->getGradedGradeable()->getSubmitter();
+            if ($submitter->isTeam()) {
+                $this->core->getQueries()->clearTeamViewedTime($submitter->getId());
+            }
+            $this->core->getOutput()->renderJsonSuccess(
+                [
+                    "name" => $attachment['name'],
+                    "path" => $attachment_path
+                ]
+            );
+        }
+    }
+
+    /**
+     * Delete an attachment for a grader
+     * @Route("/courses/{_semester}/{_course}/gradeable/{gradeable_id}/grading/attachments/delete", methods={"POST"})
+     */
+    public function deleteAttachment($gradeable_id) {
+        $anon_id = $_POST['anon_id'] ?? '';
+        $grader = $this->core->getUser();
+
+        // Get the gradeable
+        $gradeable = $this->tryGetGradeable($gradeable_id);
+        if ($gradeable === false) {
+            $this->core->getOutput()->renderJsonFail('Insufficient permissions to delete attachments.');
+            return;
+        }
+
+        // Make sure this gradeable is an electronic file gradeable
+        if ($gradeable->getType() !== GradeableType::ELECTRONIC_FILE) {
+            $this->core->getOutput()->renderJsonFail('This gradeable is not an electronic file gradeable');
+            return;
+        }
+
+        // Get user id from the anon id
+        $submitter_id = $this->tryGetSubmitterIdFromAnonId($anon_id, $gradeable_id);
+        if ($submitter_id === false) {
+            $this->core->getOutput()->renderJsonFail('Insufficient permissions to delete attachments.');
+            return;
+        }
+
+        // Get the graded gradeable
+        $graded_gradeable = $this->tryGetGradedGradeable($gradeable, $submitter_id);
+        if ($graded_gradeable === false) {
+            $this->core->getOutput()->renderJsonFail('Insufficient permissions to delete attachment.');
+            return;
+        }
+
+        // Check access
+        if (!$this->core->getAccess()->canI("path.write.attachments", ["gradeable" => $gradeable, "graded_gradeable" => $graded_gradeable])) {
+            $this->core->getOutput()->renderJsonFail('Insufficient permissions to delete attachments.');
+            return;
+        }
+
+        if (empty($_POST['attachment'])) {
+            $this->core->getOutput()->renderJsonFail('Missing attachment to delete.');
+            return;
+        }
+
+        if (strpos($_POST['attachment'], "..") !== false) {
+            $this->core->getOutput()->renderJsonFail('Invalid path.');
+            return;
+        }
+
+        $attachment_path = FileUtils::joinPaths($this->core->getConfig()->getCoursePath(), 'attachments', $gradeable->getId(), $submitter_id, $grader->getId(), $_POST["attachment"]);
+        if (is_file($attachment_path)) {
+            if (@unlink($attachment_path)) {
+                $this->core->getOutput()->renderJsonSuccess();
+            }
+            else {
+                $this->core->getOutput()->renderJsonFail('Failed to remove file.');
+            }
+        }
+        else {
+            $this->core->getOutput()->renderJsonFail('File not found.');
+        }
+    }
+
+    /**
      * Imports teams from a csv file upload
      * @Route("/courses/{_semester}/{_course}/gradeable/{gradeable_id}/grading/teams/import", methods={"POST"})
      */
@@ -965,6 +1216,12 @@ class ElectronicGraderController extends AbstractController {
         $gradeable = $this->tryGetGradeable($gradeable_id, false);
         if ($gradeable === false) {
             $this->core->addErrorMessage("Failed to load gradeable: {$gradeable_id}");
+            $this->core->redirect($this->core->buildCourseUrl());
+        }
+
+        // Make sure this gradeable is an electronic file gradeable
+        if ($gradeable->getType() !== GradeableType::ELECTRONIC_FILE) {
+            $this->core->addErrorMessage('This gradeable is not an electronic file gradeable');
             $this->core->redirect($this->core->buildCourseUrl());
         }
 
@@ -1073,6 +1330,12 @@ class ElectronicGraderController extends AbstractController {
             $this->core->redirect($this->core->buildCourseUrl());
         }
 
+        // Make sure this gradeable is an electronic file gradeable
+        if ($gradeable->getType() !== GradeableType::ELECTRONIC_FILE) {
+            $this->core->addErrorMessage('This gradeable is not an electronic file gradeable');
+            $this->core->redirect($this->core->buildCourseUrl());
+        }
+
         if (!$this->core->getAccess()->canI("grading.electronic.export_teams", ["gradeable" => $gradeable])) {
             $this->core->addErrorMessage("You do not have permission to do that.");
             $this->core->redirect($this->core->buildCourseUrl());
@@ -1108,6 +1371,16 @@ class ElectronicGraderController extends AbstractController {
      * @Route("/courses/{_semester}/{_course}/gradeable/{gradeable_id}/grading/teams/randomize_rotating")
      */
     public function randomizeTeamRotatingSections($gradeable_id) {
+        $gradeable = $this->tryGetGradeable($gradeable_id);
+        if ($gradeable === false) {
+            $this->core->addErrorMessage("Failed to load gradeable: {$gradeable_id}");
+            $this->core->redirect($this->core->buildCourseUrl());
+        }
+        // Make sure this gradeable is an electronic file gradeable
+        if ($gradeable->getType() !== GradeableType::ELECTRONIC_FILE) {
+            $this->core->addErrorMessage('This gradeable is not an electronic file gradeable');
+            $this->core->redirect($this->core->buildCourseUrl());
+        }
         $section_count = $this->core->getQueries()->getMaxRotatingSection();
         $return_url = $this->core->buildCourseUrl(['gradeable', $gradeable_id, 'grading', 'details']);
         $teams = $this->core->getQueries()->getTeamsWithMembersFromGradeableID($gradeable_id);
@@ -1154,6 +1427,12 @@ class ElectronicGraderController extends AbstractController {
         $gradeable = $this->tryGetGradeable($gradeable_id, false);
         if ($gradeable === false) {
             $this->core->addErrorMessage("Failed to load gradeable: {$gradeable_id}");
+            $this->core->redirect($this->core->buildCourseUrl());
+        }
+
+        // Make sure this gradeable is an electronic file gradeable
+        if ($gradeable->getType() !== GradeableType::ELECTRONIC_FILE) {
+            $this->core->addErrorMessage('This gradeable is not an electronic file gradeable');
             $this->core->redirect($this->core->buildCourseUrl());
         }
 
@@ -1317,6 +1596,11 @@ class ElectronicGraderController extends AbstractController {
             $this->core->addErrorMessage('Invalid Gradeable!');
             $this->core->redirect($this->core->buildCourseUrl());
         }
+        // Make sure this gradeable is an electronic file gradeable
+        if ($gradeable->getType() !== GradeableType::ELECTRONIC_FILE) {
+            $this->core->addErrorMessage('This gradeable is not an electronic file gradeable');
+            $this->core->redirect($this->core->buildCourseUrl());
+        }
         $peer = $gradeable->hasPeerComponent() && $this->core->getUser()->getGroup() == User::GROUP_STUDENT;
         $team = $gradeable->isTeamAssignment();
         if ($gradeable->hasPeerComponent() && $this->core->getUser()->getGroup() == User::GROUP_STUDENT) {
@@ -1340,7 +1624,7 @@ class ElectronicGraderController extends AbstractController {
 
             // Get the graded gradeable for the $from user
             $from_graded_gradeable = false;
-            $id_from_anon = $this->core->getQueries()->getSubmitterIdFromAnonId($from);
+            $id_from_anon = $this->core->getQueries()->getSubmitterIdFromAnonId($from, $gradeable_id);
             if ($blind_grading !== "unblind" || $anon_mode) {
                 $from_graded_gradeable = $this->tryGetGradedGradeable($gradeable, $id_from_anon, false);
             }
@@ -1376,7 +1660,7 @@ class ElectronicGraderController extends AbstractController {
             if ($goToStudent !== null) {
                 $who_id = $goToStudent->getId();
                 if ($blind_grading || $anon_mode) {
-                    $who_id = $goToStudent->getAnonId();
+                    $who_id = $goToStudent->getAnonId($gradeable_id);
                 }
             }
             if (empty($who_id)) {
@@ -1391,7 +1675,7 @@ class ElectronicGraderController extends AbstractController {
         }
         // Get the graded gradeable for the submitter we are requesting
         $graded_gradeable = false;
-        $id_from_anon = $this->core->getQueries()->getSubmitterIdFromAnonId($who_id);
+        $id_from_anon = $this->core->getQueries()->getSubmitterIdFromAnonId($who_id, $gradeable_id);
         if ($blind_grading !== "unblind" || $anon_mode) {
             $graded_gradeable = $this->tryGetGradedGradeable($gradeable, $id_from_anon, false);
         }
@@ -1403,7 +1687,7 @@ class ElectronicGraderController extends AbstractController {
             $peer = false;
         }
 
-        $gradeableUrl = $this->core->buildCourseUrl(['gradeable', $gradeable->getId(), 'grading', 'status']);
+        $gradeableUrl = $this->core->buildCourseUrl(['gradeable', $gradeable->getId(), 'grading', 'details']);
         $this->core->getOutput()->addBreadcrumb("{$gradeable->getTitle()} Grading", $gradeableUrl);
         $indexUrl = $this->core->buildCourseUrl(['gradeable', $gradeable_id, 'grading', 'details']);
         $this->core->getOutput()->addBreadcrumb('Grading Interface ' . GradingOrder::getGradingOrderMessage($sort, $direction));
@@ -1573,6 +1857,12 @@ class ElectronicGraderController extends AbstractController {
             return;
         }
 
+        // Make sure that this gradeable is an electronic file gradeable
+        if ($gradeable->getType() !== GradeableType::ELECTRONIC_FILE) {
+            $this->core->getOutput()->renderJsonFail('This gradeable is not an electronic file gradeable');
+            return;
+        }
+
         // checks if user has permission
         if (!$this->core->getAccess()->canI("grading.electronic.grade", ["gradeable" => $gradeable])) {
             $this->core->getOutput()->renderJsonFail('Insufficient permissions to get gradeable rubric data');
@@ -1618,6 +1908,11 @@ class ElectronicGraderController extends AbstractController {
         if ($gradeable === false) {
             return;
         }
+        // Make sure that this gradeable is an electronic file gradeable
+        if ($gradeable->getType() !== GradeableType::ELECTRONIC_FILE) {
+            $this->core->getOutput()->renderJsonFail('This gradeable is not an electronic file gradeable');
+            return;
+        }
 
         $graded_gradeable = $this->tryGetGradedGradeable($gradeable, $this->core->getUser()->getId(), false);
 
@@ -1655,13 +1950,18 @@ class ElectronicGraderController extends AbstractController {
         if ($gradeable === false) {
             return;
         }
+        // Make sure that this gradeable is an electronic file gradeable
+        if ($gradeable->getType() !== GradeableType::ELECTRONIC_FILE) {
+            $this->core->getOutput()->renderJsonFail('This gradeable is not an electronic file gradeable');
+            return;
+        }
 
         $all_peers = ($all_peers === "true");
 
         $grader = $this->core->getUser();
 
         // Get user id from the anon id
-        $submitter_id = $this->tryGetSubmitterIdFromAnonId($anon_id);
+        $submitter_id = $this->tryGetSubmitterIdFromAnonId($anon_id, $gradeable_id);
         if ($submitter_id === false) {
             return;
         }
@@ -1763,7 +2063,7 @@ class ElectronicGraderController extends AbstractController {
             $response_data['peer_gradeable'] = false;
         }
 
-        $response_data['anon_id'] = $graded_gradeable->getSubmitter()->getAnonId();
+        $response_data['anon_id'] = $graded_gradeable->getSubmitter()->getAnonId($gradeable->getId());
 
         $response_data['itempool_items'] = [];
         $components = $gradeable->getComponents();
@@ -1835,6 +2135,11 @@ class ElectronicGraderController extends AbstractController {
         if ($gradeable === false) {
             return;
         }
+        // Make sure that this gradeable is an electronic file gradeable
+        if ($gradeable->getType() !== GradeableType::ELECTRONIC_FILE) {
+            $this->core->getOutput()->renderJsonFail('This gradeable is not an electronic file gradeable');
+            return;
+        }
         // get the component
         $component = $this->tryGetComponent($gradeable, $component_id);
         if ($component === false) {
@@ -1842,7 +2147,7 @@ class ElectronicGraderController extends AbstractController {
         }
 
         // Get user id from the anon id
-        $submitter_id = $this->tryGetSubmitterIdFromAnonId($anon_id);
+        $submitter_id = $this->tryGetSubmitterIdFromAnonId($anon_id, $gradeable_id);
         if ($submitter_id === false) {
             return;
         }
@@ -2030,6 +2335,12 @@ class ElectronicGraderController extends AbstractController {
             return;
         }
 
+        // Make sure this gradeable is an electronic file gradeable
+        if ($gradeable->getType() !== GradeableType::ELECTRONIC_FILE) {
+            $this->core->getOutput()->renderJsonFail('This gradeable is not an electronic file gradeable');
+            return;
+        }
+
         // get the component
         $component = $this->tryGetComponent($gradeable, $component_id);
         if ($component === false) {
@@ -2107,6 +2418,12 @@ class ElectronicGraderController extends AbstractController {
             return;
         }
 
+        // Make sure this gradeable is an electronic file gradeable
+        if ($gradeable->getType() !== GradeableType::ELECTRONIC_FILE) {
+            $this->core->getOutput()->renderJsonFail('This gradeable is not an electronic file gradeable');
+            return;
+        }
+
         // checks if user has permission
         if (!$this->core->getAccess()->canI("grading.electronic.save_component", ["gradeable" => $gradeable])) {
             $this->core->getOutput()->renderJsonFail('Insufficient permissions to save marks');
@@ -2160,6 +2477,12 @@ class ElectronicGraderController extends AbstractController {
         // Get the gradeable
         $gradeable = $this->tryGetGradeable($gradeable_id);
         if ($gradeable === false) {
+            return;
+        }
+
+        // Make sure this gradeable is an electronic file gradeable
+        if ($gradeable->getType() !== GradeableType::ELECTRONIC_FILE) {
+            $this->core->getOutput()->renderJsonFail('This gradeable is not an electronic file gradeable');
             return;
         }
 
@@ -2220,6 +2543,12 @@ class ElectronicGraderController extends AbstractController {
             return;
         }
 
+        // Make sure this gradeable is an electronic file gradeable
+        if ($gradeable->getType() !== GradeableType::ELECTRONIC_FILE) {
+            $this->core->getOutput()->renderJsonFail('This gradeable is not an electronic file gradeable');
+            return;
+        }
+
         $peer = $_POST['peer'] === 'true';
 
         // checks if user has permission
@@ -2276,6 +2605,12 @@ class ElectronicGraderController extends AbstractController {
             return;
         }
 
+        // Make sure this gradeable is an electronic file gradeable
+        if ($gradeable->getType() !== GradeableType::ELECTRONIC_FILE) {
+            $this->core->getOutput()->renderJsonFail('This gradeable is not an electronic file gradeable');
+            return;
+        }
+
         // checks if user has permission
         if (!$this->core->getAccess()->canI("grading.electronic.delete_component", ["gradeable" => $gradeable])) {
             $this->core->getOutput()->renderJsonFail('Insufficient permissions to delete components');
@@ -2327,6 +2662,12 @@ class ElectronicGraderController extends AbstractController {
         // Get the gradeable
         $gradeable = $this->tryGetGradeable($gradeable_id);
         if ($gradeable === false) {
+            return;
+        }
+
+        // Make sure this gradeable is an electronic file gradeable
+        if ($gradeable->getType() !== GradeableType::ELECTRONIC_FILE) {
+            $this->core->getOutput()->renderJsonFail('This gradeable is not an electronic file gradeable');
             return;
         }
 
@@ -2395,6 +2736,12 @@ class ElectronicGraderController extends AbstractController {
             return;
         }
 
+        // Make sure this gradeable is an electronic file gradeable
+        if ($gradeable->getType() !== GradeableType::ELECTRONIC_FILE) {
+            $this->core->getOutput()->renderJsonFail('This gradeable is not an electronic file gradeable');
+            return;
+        }
+
         // get the component
         $component = $this->tryGetComponent($gradeable, $component_id);
         if ($component === false) {
@@ -2445,8 +2792,14 @@ class ElectronicGraderController extends AbstractController {
             return;
         }
 
+        // Make sure this gradeable is an electronic file gradeable
+        if ($gradeable->getType() !== GradeableType::ELECTRONIC_FILE) {
+            $this->core->getOutput()->renderJsonFail('This gradeable is not an electronic file gradeable');
+            return;
+        }
+
         // Get the graded gradeable
-        $who_id = $this->core->getQueries()->getSubmitterIdFromAnonId($who_id);
+        $who_id = $this->core->getQueries()->getSubmitterIdFromAnonId($who_id, $gradeable_id);
         $graded_gradeable = $this->tryGetGradedGradeable($gradeable, $who_id);
         if ($graded_gradeable === false) {
             return;
@@ -2524,6 +2877,12 @@ class ElectronicGraderController extends AbstractController {
             return;
         }
 
+        // Make sure this gradeable is an electronic file gradeable
+        if ($gradeable->getType() !== GradeableType::ELECTRONIC_FILE) {
+            $this->core->getOutput()->renderJsonFail('This gradeable is not an electronic file gradeable');
+            return;
+        }
+
         // get the component
         $component = $this->tryGetComponent($gradeable, $component_id);
         if ($component === false) {
@@ -2567,6 +2926,12 @@ class ElectronicGraderController extends AbstractController {
         // Get the gradeable
         $gradeable = $this->tryGetGradeable($gradeable_id);
         if ($gradeable === false) {
+            return;
+        }
+
+        // Make sure this gradeable is an electronic file gradeable
+        if ($gradeable->getType() !== GradeableType::ELECTRONIC_FILE) {
+            $this->core->getOutput()->renderJsonFail('This gradeable is not an electronic file gradeable');
             return;
         }
 
@@ -2621,8 +2986,14 @@ class ElectronicGraderController extends AbstractController {
             return;
         }
 
+        // Make sure this gradeable is an electronic file gradeable
+        if ($gradeable->getType() !== GradeableType::ELECTRONIC_FILE) {
+            $this->core->getOutput()->renderJsonFail('This gradeable is not an electronic file gradeable');
+            return;
+        }
+
         // Get user id from the anon id
-        $submitter_id = $this->tryGetSubmitterIdFromAnonId($anon_id);
+        $submitter_id = $this->tryGetSubmitterIdFromAnonId($anon_id, $gradeable_id);
         if ($submitter_id === false) {
             return;
         }
@@ -2683,6 +3054,12 @@ class ElectronicGraderController extends AbstractController {
             return;
         }
 
+        // Make sure this gradeable is an electronic file gradeable
+        if ($gradeable->getType() !== GradeableType::ELECTRONIC_FILE) {
+            $this->core->getOutput()->renderJsonFail('This gradeable is not an electronic file gradeable');
+            return;
+        }
+
         // get the component
         $component = $this->tryGetComponent($gradeable, $component_id);
         if ($component === false) {
@@ -2690,7 +3067,7 @@ class ElectronicGraderController extends AbstractController {
         }
 
         // Get user id from the anon id
-        $submitter_id = $this->tryGetSubmitterIdFromAnonId($anon_id);
+        $submitter_id = $this->tryGetSubmitterIdFromAnonId($anon_id, $gradeable_id);
         if ($submitter_id === false) {
             return;
         }
@@ -2753,8 +3130,15 @@ class ElectronicGraderController extends AbstractController {
         if ($gradeable === false) {
             return;
         }
+
+        // Make sure this gradeable is an electronic file gradeable
+        if ($gradeable->getType() !== GradeableType::ELECTRONIC_FILE) {
+            $this->core->getOutput()->renderJsonFail('This gradeable is not an electronic file gradeable');
+            return;
+        }
+
         // Get user id from the anon id
-        $submitter_id = $this->tryGetSubmitterIdFromAnonId($anon_id);
+        $submitter_id = $this->tryGetSubmitterIdFromAnonId($anon_id, $gradeable_id);
         if ($submitter_id === false) {
             return;
         }
@@ -2793,6 +3177,12 @@ class ElectronicGraderController extends AbstractController {
         // Get the gradeable
         $gradeable = $this->tryGetGradeable($gradeable_id);
         if ($gradeable === false) {
+            return;
+        }
+
+        // Make sure this gradeable is an electronic file gradeable
+        if ($gradeable->getType() !== GradeableType::ELECTRONIC_FILE) {
+            $this->core->getOutput()->renderJsonFail('This gradeable is not an electronic file gradeable');
             return;
         }
 
@@ -2838,7 +3228,12 @@ class ElectronicGraderController extends AbstractController {
         // Show all submitters if grader has permissions, otherwise just section submitters
         $submitter_ids = ($grader->accessFullGrading() ? $all_submitter_ids : $section_submitter_ids);
 
-        $submitter_anon_ids = ($anon != 'unblind') ? $submitter_ids : $this->core->getQueries()->getAnonId($submitter_ids);
+        if ($gradeable->isTeamAssignment()) {
+            $submitter_anon_ids = ($anon != 'unblind') ? $submitter_ids : $this->core->getQueries()->getTeamAnonId($submitter_ids);
+        }
+        else {
+            $submitter_anon_ids = ($anon != 'unblind') ? $submitter_ids : $this->core->getQueries()->getAnonId($submitter_ids, $gradeable->getId());
+        }
 
         $section_graded_component_count = 0;
         $section_total_component_count  = 0;
@@ -2972,6 +3367,9 @@ class ElectronicGraderController extends AbstractController {
         if (!$gradeable) {
             $error = "Invalid Gradeable ID given!";
         }
+        elseif ($gradeable->getType() !== GradeableType::ELECTRONIC_FILE) {
+            $error = 'This gradeable is not an electronic file gradeable';
+        }
         elseif ($componentItempoolInfo['is_linked'] && empty($itempool_item)) {
             //Itempool must be non-empty when component is linked with the itempool
             $error = 'This component expects only non-empty itempool-item!';
@@ -3015,11 +3413,16 @@ class ElectronicGraderController extends AbstractController {
         if ($gradeable === false) {
             return null;
         }
+        // Make sure this gradeable is an electronic file gradeable
+        if ($gradeable->getType() !== GradeableType::ELECTRONIC_FILE) {
+            $this->core->getOutput()->renderJsonError("This gradeable is not an electronic file gradeable");
+            return null;
+        }
         $graded_gradeable = $this->tryGetGradedGradeable($gradeable, $user_id)->getGradeableId() == $gradeable_id;
         if ($graded_gradeable === false) {
             return null;
         }
-        if ($gradeable->setPeerFeedback($this->core->getQueries()->getUserFromAnon($grader_id)[$grader_id], $user_id, $feedback)) {
+        if ($gradeable->setPeerFeedback($this->core->getQueries()->getUserFromAnon($grader_id, $gradeable_id)[$grader_id], $user_id, $feedback)) {
             $this->core->getOutput()->renderJsonSuccess("Feedback successfully uploaded");
         }
         else {
@@ -3038,10 +3441,17 @@ class ElectronicGraderController extends AbstractController {
         $gradeable = $this->tryGetGradeable($gradeable_id);
         if ($gradeable === false) {
             $this->core->getOutput()->renderJsonFail('Could not fetch gradeable');
+            return;
+        }
+        // Make sure this gradeable is an electronic file gradeable
+        if ($gradeable->getType() !== GradeableType::ELECTRONIC_FILE) {
+            $this->core->getOutput()->renderJsonFail('This gradeable is not an electronic file gradeable');
+            return;
         }
         $graded_gradeable = $this->tryGetGradedGradeable($gradeable, $submitter_id);
         if ($graded_gradeable === false) {
             $this->core->getOutput()->renderJsonFail('Could not fetch graded gradeable');
+            return;
         }
         $ta_graded_gradeable = $graded_gradeable->getOrCreateTaGradedGradeable();
         foreach ($ta_graded_gradeable->getGradedComponentContainers() as $container) {
@@ -3049,7 +3459,8 @@ class ElectronicGraderController extends AbstractController {
             $ta_graded_gradeable->deleteGradedComponent($component, $this->core->getQueries()->getUserById($peer_id));
         }
         $ta_graded_gradeable->removeOverallComment($peer_id);
-        $this->core->getQueries()->deleteOverallComment($gradeable_id, $peer_id, $gradeable->isTeamAssignment());
+        $this->core->getQueries()->deleteOverallComment($gradeable_id, $peer_id);
+        $this->core->getQueries()->deleteTaGradedGradeableByIds($gradeable_id, $peer_id);
         $ta_graded_gradeable->resetUserViewedDate();
 
         // Finally, save the graded gradeable

@@ -721,6 +721,7 @@ class GradeableListTester extends BaseUnitTest {
         ]);
         $core->setUser($user);
         $core->setConfig(new Config($core));
+        $core->setTesting(true);
         return $core;
     }
 
@@ -779,9 +780,9 @@ class GradeableListTester extends BaseUnitTest {
             'team_assignment' => false,
             'team_size_max' => 1,
             'ta_grading' => $ta_grading,
-            'scanned_exam' => false,
             'student_view' => true,
             'student_view_after_grades' => false,
+            'student_download' => true,
             'student_submit' => $student_submit,
             'has_due_date' => $has_due_date,
             'has_release_date' => $has_release_date,

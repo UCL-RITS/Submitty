@@ -1,9 +1,8 @@
-window.addEventListener("resize", checkSidebarCollapse);
-
 ////////////Begin: Removed redundant link in breadcrumbs////////////////////////
 //See this pr for why we might want to remove this code at some point
 //https://github.com/Submitty/Submitty/pull/5071
 window.addEventListener("resize", function(){
+  loadInBreadcrumbLinks();
   adjustBreadcrumbLinks();
 });
 
@@ -15,8 +14,8 @@ document.addEventListener("DOMContentLoaded", function() {
 });
 
 function loadInBreadcrumbLinks(){
-  mobileHomeLink = $("#home-button").attr('href');
-  desktopHomeLink = $("#desktop_home_link").attr('href');
+  mobileHomeLink = mobileHomeLink !== null ? mobileHomeLink : $("#home-button").attr('href');
+  desktopHomeLink = desktopHomeLink !== null ? desktopHomeLink : $("#desktop_home_link").attr('href');
 }
 
 function adjustBreadcrumbLinks(){
@@ -29,8 +28,6 @@ function adjustBreadcrumbLinks(){
   }
 }
 ////////////End: Removed redundant link in breadcrumbs//////////////////////////
-
-
 
 /**
  * Acts in a similar fashion to Core->buildUrl() function within the PHP code
@@ -134,50 +131,6 @@ function changeDiffView(div_name, gradeable_id, who_id, version, index, autochec
 
 }
 
-function loadTestcaseOutput(div_name, gradeable_id, who_id, index, version = ''){
-    let orig_div_name = div_name;
-    div_name = "#" + div_name;
-
-    let loadingTools = $("#tc_" + index).find(".loading-tools");
-
-    if($(div_name).is(":visible")){
-        $("#show_char_"+index).toggle();
-        $(div_name).empty();
-        toggleDiv(orig_div_name);
-
-        loadingTools.find("span").hide();
-        loadingTools.find(".loading-tools-show").show();
-    }
-    else{
-        $("#show_char_"+index).toggle();
-        var url = buildCourseUrl(['gradeable', gradeable_id, 'grading', 'student_output']) + `?who_id=${who_id}&index=${index}&version=${version}`;
-
-        loadingTools.find("span").hide();
-        loadingTools.find(".loading-tools-in-progress").show();
-        $.getJSON({
-            url: url,
-            success: function(response) {
-                if (response.status !== 'success') {
-                    alert('Error getting file diff: ' + response.message);
-                    return;
-                }
-                $(div_name).empty();
-                $(div_name).html(response.data);
-                toggleDiv(orig_div_name);
-
-                loadingTools.find("span").hide();
-                loadingTools.find(".loading-tools-hide").show();
-                enableKeyToClick();
-            },
-            error: function(e) {
-                alert("Could not load diff, please refresh the page and try again.");
-                console.log(e);
-                displayAjaxError(e);
-            }
-        })
-    }
-}
-
 function newDeleteGradeableForm(form_action, gradeable_name) {
     $('.popup-form').css('display', 'none');
     var form = $("#delete-gradeable-form");
@@ -261,21 +214,80 @@ function newUploadCourseMaterialsForm() {
 
 }
 
-function newEditCourseMaterialsFolderForm(id, dir) {
+function newEditCourseMaterialsFolderForm(tag) {
+    let id = $(tag).data('id');
+    let dir = $(tag).data('priority');
+    let folder_sections = $(tag).data('sections');
+    let partial_sections = $(tag).data('partial-sections');
+    let release_time =  $(tag).data('release-time');
+    let is_hidden = $(tag).data('hidden-state');
+    const partially_hidden = 2;
     let form = $('#edit-course-materials-folder-form');
 
-    $('#hide-materials-checkbox-edit', form).prop('checked', false);
+    let element = document.getElementById("edit-folder-picker");
+    element._flatpickr.setDate(release_time);
+
+    let hide_materials_box = $('#hide-folder-materials-checkbox-edit', form);
+    if (is_hidden > 0) {
+        hide_materials_box.prop('checked', true).trigger('change');
+        if (is_hidden === partially_hidden) {
+            hide_materials_box.attr('class', 'partial-checkbox');
+            $(hide_materials_box.siblings()[0]).before("<span><br><em>(Currently, some materials inside this folder are hidden.)</em></span>");
+        }
+    }
+    else {
+        hide_materials_box.prop('checked', false).trigger('change');
+    }
+
+    $('#show-some-section-selection-folder-edit :checkbox:enabled').prop('checked', false);
+    let showSections = function() {
+        $("#all-sections-showing-no-folder", form).prop('checked',false);
+        $("#all-sections-showing-yes-folder", form).prop('checked',true);
+        $("#show-some-section-selection-folder-edit", form).show();
+    }
+    let sectionsVisible = false;
+    if (folder_sections.length !== 0) {
+        for(let index = 0; index < folder_sections.length; ++index) {
+            $("#section-folder-edit-" + folder_sections[index], form).prop('checked',true);
+            $("#section-folder-edit-" + folder_sections[index], form).removeClass('partial-checkbox');
+            if ($(this).attr('class') === '') {
+                $(this).removeAttr('class');
+            }
+        }
+        showSections();
+        sectionsVisible = true;
+    }
+    else{
+        $("#show-some-section-selection-folder-edit", form).hide();
+        $("#all-sections-showing-yes-folder", form).prop('checked',false);
+        $("#all-sections-showing-no-folder", form).prop('checked',true);
+    }
+    if (partial_sections.length !== 0) {
+        for(let index = 0; index < partial_sections.length; ++index) {
+            $("#section-folder-edit-" + partial_sections[index], form).attr('class', 'partial-checkbox');
+            $("#section-folder-edit-" + partial_sections[index], form).prop('checked', true);
+        }
+        if (!sectionsVisible) {
+            showSections();
+        }
+    }
+
     $('#material-folder-edit-form', form).attr('data-id', id);
-    $("#show-some-section-selection-edit", form).hide();
-    $("#all-sections-showing-yes", form).prop('checked',false);
-    $("#all-sections-showing-no", form).prop('checked',true);
     $('#edit-folder-sort', form).attr('value', dir);
     disableFullUpdate();
     form.css("display", "block");
     captureTabInModal("edit-course-materials-folder-form");
 }
 
-function newEditCourseMaterialsForm(id, dir, this_file_section, this_hide_from_students, release_time, is_link, link_title, link_url) {
+function newEditCourseMaterialsForm(tag) {
+    let id = $(tag).data('id');
+    let dir = $(tag).data('priority');
+    let this_file_section = $(tag).data('sections');
+    let this_hide_from_students = $(tag).data('hidden-state');
+    let release_time = $(tag).data('release-time');
+    let is_link = $(tag).data('is-link');
+    let link_title = $(tag).data('link-title');
+    let link_url = $(tag).data('link-url');
 
     let form = $("#edit-course-materials-form");
 
@@ -283,13 +295,16 @@ function newEditCourseMaterialsForm(id, dir, this_file_section, this_hide_from_s
 
     element._flatpickr.setDate(release_time);
 
-    if(this_hide_from_students === "1"){
-        $("#hide-materials-checkbox-edit", form).prop('checked',true);
+    if(this_hide_from_students === 1){
+        $("#hide-materials-checkbox-edit", form).prop('checked',true).trigger('change');
     }
 
     else{
-        $("#hide-materials-checkbox-edit", form).prop('checked',false);
+        $("#hide-materials-checkbox-edit", form).prop('checked',false).trigger('change');
     }
+
+    $('#hide-materials-checkbox-edit:checked ~ #edit-form-hide-warning').show();
+    $('#hide-materials-checkbox-edit:not(:checked) ~ #edit-form-hide-warning').hide();
 
     $('#show-some-section-selection-edit :checkbox:enabled').prop('checked', false);
 
@@ -306,7 +321,7 @@ function newEditCourseMaterialsForm(id, dir, this_file_section, this_hide_from_s
         $("#all-sections-showing-yes", form).prop('checked',false);
         $("#all-sections-showing-no", form).prop('checked',true);
     }
-    if (is_link === "1") {
+    if (is_link === 1) {
         const title_label = $("#edit-url-title-label", form);
         const url_label = $("#edit-url-url-label", form);
         title_label.prop('hidden', false);
@@ -337,7 +352,7 @@ function captureTabInModal(formName, resetFocus=true){
     form.off('keydown');//Remove any old redirects
 
     /*get all the elements to tab through*/
-    var inputs = form.find(':focusable').filter(':visible');
+    var inputs = form.find(':tabbable').filter(':visible');
     var firstInput = inputs.first();
     var lastInput = inputs.last();
 
@@ -624,11 +639,6 @@ function checkVersionChange(days_late, late_days_allowed){
     return true;
 }
 
-function checkTaVersionChange(){
-    var message = "You are overriding the student's chosen submission. Are you sure you want to continue?";
-    return confirm(message);
-}
-
 function checkVersionsUsed(gradeable, versions_used, versions_allowed) {
     versions_used = parseInt(versions_used);
     versions_allowed = parseInt(versions_allowed);
@@ -664,7 +674,11 @@ function check_server(url) {
 }
 
 function downloadFile(path, dir) {
-    window.location = buildCourseUrl(['download']) + `?dir=${encodeURIComponent(dir)}&path=${encodeURIComponent(path)}`;
+    let download_path = buildCourseUrl(['download']) + `?dir=${encodeURIComponent(dir)}&path=${encodeURIComponent(path)}`;
+    if ($("#submission_browser").length > 0) {
+        download_path += `&gradeable_id=${$("#submission_browser").data("gradeable-id")}`;
+    }
+    window.location = download_path;
 }
 
 function downloadCourseMaterial(id) {
@@ -689,13 +703,33 @@ function downloadCourseMaterialZip(id) {
 }
 
 function checkColorActivated() {
-    var pos = 0;
-    var seq = "&&((%'%'BA\r";
+    pos = 0;
+    seq = "&&((%'%'BA\r";
+    const rainbow_mode = JSON.parse(localStorage.getItem('rainbow-mode'));
+
+    function inject() {
+        $(document.body).prepend('<div id="rainbow-mode" class="rainbow"></div>');
+    }
+    function remove() {
+        $(document.body).find('#rainbow-mode').remove();
+    }
+
+    function toggle(flag) {
+        if (flag) inject();
+        else remove();
+    }
+
+    if (rainbow_mode === true) {
+        inject();
+    }
+
     $(document.body).keyup(function colorEvent(e) {
         pos = seq.charCodeAt(pos) === e.keyCode ? pos + 1 : 0;
         if (pos === seq.length) {
-            setInterval(function() { $("*").addClass("rainbow"); }, 100);
-            $(document.body).off('keyup', colorEvent);
+            flag = JSON.parse(localStorage.getItem('rainbow-mode')) === true;
+            localStorage.setItem('rainbow-mode', !flag);
+            toggle(!flag);
+            pos = 0;
         }
     });
 }
@@ -748,13 +782,6 @@ function markViewed(ids, redirect) {
         contentType: false,
         processData: false
     });
-}
-
-function hideEmptyCourseMaterialFolders() {
-  // fetch all the folders and remove those one which have no `file` within.
-  $('.folder-container').each(function() {
-    $(this).find('.file-container').length === 0 ? $(this).remove() : null;
-  });
 }
 
 function closeDivForCourseMaterials(num) {
@@ -832,7 +859,13 @@ function openFrame(url, id, filename, ta_grading_interpret=false) {
             else if (url.includes("checkout")) {
                 directory = "checkout";
             }
+            else if (url.includes("attachments")) {
+                directory = "attachments";
+            }
             url = `${display_file_url}?dir=${encodeURIComponent(directory)}&file=${encodeURIComponent(filename)}&path=${encodeURIComponent(url)}&ta_grading=true`
+        }
+        if ($("#submission_browser").length > 0) {
+            url += `&gradeable_id=${$("#submission_browser").data("gradeable-id")}`;
         }
         // handle pdf
         if(filename.substring(filename.length - 3) === "pdf") {
@@ -995,20 +1028,24 @@ function displaySuccessMessage(message) {
     displayMessage(message, 'success');
 }
 
+function displayWarningMessage(message) {
+    displayMessage(message, 'warning');
+}
+
 /**
  * Display a toast message after an action.
  *
  * The styling here should match what's used in GlobalHeader.twig to define the messages coming from PHP
  *
  * @param {string} message
- * @param {string} type either 'error' or 'success'
+ * @param {string} type either 'error', 'success', or 'warning'
  */
 function displayMessage(message, type) {
     const id = `${type}-js-${messages}`;
-    message = `<div id="${id}" class="inner-message alert alert-${type}"><span><i style="margin-right:3px;" class="fas fa-${type === 'error' ? 'times' : 'check'}-circle"></i>${message.replace(/(?:\r\n|\r|\n)/g, '<br />')}</span><a class="fas fa-times" onClick="removeMessagePopup('${type}-js-${messages}');"></a></div>`;
+    message = `<div id="${id}" class="inner-message alert alert-${type}"><span><i style="margin-right:3px;" class="fas fa${type === 'error' ? '-times' : (type === 'success' ? '-check' : '')}-circle${type === 'warning' ? '-exclamation' : ''}"></i>${message.replace(/(?:\r\n|\r|\n)/g, '<br />')}</span><a class="fas fa-times" onClick="removeMessagePopup('${type}-js-${messages}');"></a></div>`;
     $('#messages').append(message);
     $('#messages').fadeIn('slow');
-    if (type === 'success') {
+    if (type === 'success' || type === 'warning') {
         setTimeout(() => {
             $(`#${id}`).fadeOut();
         }, 5000);
@@ -1266,13 +1303,12 @@ $.fn.isInViewport = function() {                                        // jQuer
 };
 
 function checkSidebarCollapse() {
-    var size = $(document.body).width();
-    if (size < 1150) {
-        document.cookie = "collapse_sidebar=true;";
+    if ($(document.body).width() < 1150) {
+        document.cookie = "collapse_sidebar=true;path=/";
         $("aside").toggleClass("collapsed", true);
     }
     else{
-        document.cookie = "collapse_sidebar=false;";
+        document.cookie = "collapse_sidebar=false;path=/";
         $("aside").toggleClass("collapsed", false);
     }
 }
@@ -1318,10 +1354,10 @@ $(document).ready(function() {
 
 //Called from the DOM collapse button, toggle collapsed and save to localStorage
 function toggleSidebar() {
-    var sidebar = $("aside");
-    var shown = sidebar.hasClass("collapsed");
+    const sidebar = $("aside");
+    const shown = sidebar.hasClass("collapsed");
 
-    document.cookie = "collapse_sidebar=" + (!shown).toString() + ";";
+    document.cookie = "collapse_sidebar=" + (!shown).toString() + ";path=/";
     sidebar.toggleClass("collapsed", !shown);
 }
 
@@ -1342,10 +1378,7 @@ $(document).ready(function() {
         }
     });
 
-    //If they make their screen too small, collapse the sidebar to allow more horizontal space
-    $(document.body).resize(function() {
-        checkSidebarCollapse();
-    });
+    window.addEventListener("resize", checkSidebarCollapse);
 });
 
 function checkBulkProgress(gradeable_id){
@@ -1461,7 +1494,14 @@ function popOutSubmittedFile(html_file, url_file) {
     else if (url_file.includes("split_pdf")) {
       directory = "split_pdf";
     }
-    window.open(display_file_url + "?dir=" + encodeURIComponent(directory) + "&file=" + encodeURIComponent(html_file) + "&path=" + encodeURIComponent(url_file) + "&ta_grading=true","_blank","toolbar=no,scrollbars=yes,resizable=yes, width=700, height=600");
+    else if (url_file.includes("attachments")) {
+      directory = "attachments";
+    }
+    file_path= display_file_url + "?dir=" + encodeURIComponent(directory) + "&file=" + encodeURIComponent(html_file) + "&path=" + encodeURIComponent(url_file) + "&ta_grading=true";
+    if ($("#submission_browser").length > 0) {
+        file_path += `&gradeable_id=${$("#submission_browser").data("gradeable-id")}`;
+    }
+    window.open(file_path,"_blank","toolbar=no,scrollbars=yes,resizable=yes, width=700, height=600");
     return false;
   }
 
@@ -1587,7 +1627,7 @@ function previewMarkdown(mode) {
     if (!markdown_preview.length)      throw new Error(`Could not obtain markdown_preview`);
     if (!accessibility_message.length) throw new Error(`Could not obtain accessibility_message`);
 
-    if (mode === 'preview') { 
+    if (mode === 'preview') {
         if (markdown_header.attr('data-mode') === 'preview') return;
         accessibility_message.hide();
         markdown_textarea.hide();
