@@ -11,13 +11,13 @@ env:
   SUBMITTY_INSTALL_DIR: /usr/local/submitty
   SUBMITTY_REPOSITORY: /usr/local/submitty/GIT_CHECKOUT/Submitty
   POSTGRES_HOST: localhost
-  PHP_VER: 7.2
+  PHP_VER: 7.4
   NODE_VERSION: 16
-  PYTHON_VERSION: 3.6
+  PYTHON_VERSION: 3.8
 
 jobs:
     css-lint:
-        runs-on: ubuntu-18.04
+        runs-on: ubuntu-20.04
         defaults:
             run:
                 working-directory: site
@@ -39,7 +39,7 @@ jobs:
 
 
     js-lint:
-        runs-on: ubuntu-18.04
+        runs-on: ubuntu-20.04
         defaults:
             run:
                 working-directory: site
@@ -58,10 +58,12 @@ jobs:
             - run: npm install
             - name: Run eslint
               run: npm run eslint
+            - name: Run npm build (tsc and esbuild)
+              run: npm run build
 
 
     js-unit:
-        runs-on: ubuntu-18.04
+        runs-on: ubuntu-20.04
         defaults:
             run:
                 working-directory: site
@@ -87,7 +89,7 @@ jobs:
 
 
     php-lint:
-        runs-on: ubuntu-18.04
+        runs-on: ubuntu-20.04
         defaults:
             run:
                 working-directory: site
@@ -118,11 +120,11 @@ jobs:
             - name: Static analysis
               run: |
                   php vendor/bin/phpstan  --version
-                  php vendor/bin/phpstan analyze app
+                  php vendor/bin/phpstan analyze app public/index.php socket/index.php
 
 
     php-unit:
-      runs-on: ubuntu-18.04
+      runs-on: ubuntu-20.04
       defaults:
           run:
               working-directory: site
@@ -155,7 +157,7 @@ jobs:
 
 
     python-lint:
-      runs-on: ubuntu-18.04
+      runs-on: ubuntu-20.04
       steps:
         - uses: actions/checkout@v2
         - uses: actions/setup-python@v2
@@ -177,7 +179,7 @@ jobs:
 
 
     python-unit:
-      runs-on: ubuntu-18.04
+      runs-on: ubuntu-20.04
       steps:
         - uses: actions/checkout@v2
         - uses: actions/setup-python@v2
@@ -234,6 +236,17 @@ jobs:
             flags: autograder
 
 
+    shellcheck:
+      name: ShellCheck
+      runs-on: ubuntu-20.04
+      steps:
+        - uses: actions/checkout@v2
+        - name: install ShellCheck
+          run: sudo apt-get install -y shellcheck
+        - name: Run ShellCheck
+          run: python3 run_shellcheck.py  # Uses the default Python installed with Ubuntu
+
+
     e2e:
         needs:
           - js-lint
@@ -243,7 +256,8 @@ jobs:
           - python-lint
           - python-unit
           - css-lint
-        runs-on: ubuntu-18.04
+          - shellcheck
+        runs-on: ubuntu-20.04
         services:
           postgres:
             image: postgres
@@ -281,7 +295,7 @@ jobs:
           - uses: shivammathur/setup-php@2.7.0
             with:
               php-version: ${{ env.PHP_VER }}
-              extensions: imagick
+              extensions: imagick, ldap
 
           - name: Set Timezone
             run: |
@@ -345,9 +359,10 @@ jobs:
               unzip vnu.jar_20.3.16.zip
               sudo mv dist/vnu.jar /usr/bin/
 
-          - name: Create Database and default user
+          - name: Create Database and default users
             run: |
               PGPASSWORD=${PGPASSWORD} psql -d postgres -h localhost -U postgres -c "CREATE ROLE submitty_dbuser WITH SUPERUSER CREATEDB CREATEROLE LOGIN PASSWORD 'submitty_dbuser'"
+              PGPASSWORD=${PGPASSWORD} psql -d postgres -h localhost -U postgres -c "CREATE ROLE submitty_course_dbuser WITH LOGIN PASSWORD 'submitty_course_dbuser'"
               PGPASSWORD=${PGPASSWORD} psql -d postgres -h localhost -U submitty_dbuser -c "CREATE DATABASE submitty"
 
           - name: Install apt-get packages
@@ -374,6 +389,11 @@ jobs:
             run: |
               cd $SUBMITTY_REPOSITORY
               sudo -E env "PATH=$PATH" bash .setup/testing/setup.sh
+
+          - name: Setup ldap
+            run: |
+              cd $SUBMITTY_REPOSITORY
+              sudo -E env "PATH=$PATH" bash .setup/testing/setup_ldap.sh
 
           - name: Set up sample course
             run:  sudo -E env "PATH=$PATH" python3 /usr/local/submitty/GIT_CHECKOUT/Submitty/.setup/bin/setup_sample_courses.py --no_grading sample
@@ -447,14 +467,21 @@ jobs:
               key: ${{ runner.os }}-cache-node-modules-dev-${{ hashFiles('**/package-lock.json') }}
               restore-keys: |
                  ${{ runner.os }}-cache-node-modules-dev
-          - name: Install Cypress
+
+          - name: Install node dependencies
             working-directory: ${{env.SUBMITTY_REPOSITORY}}/site
             run: |
               npm install file-saver --save
               npm install --production=false
 
+          - name: Run API tests
+            working-directory: ${{env.SUBMITTY_REPOSITORY}}/site
+            run: npm run test:api
+            env:
+              BASE_URL: http://localhost
+
           - name: Run cypress e2e tests with pam auth
-            uses: cypress-io/github-action@v2
+            uses: cypress-io/github-action@v4
             with:
               config: baseUrl=http://localhost
               working-directory: ${{env.SUBMITTY_REPOSITORY}}/site
@@ -468,10 +495,10 @@ jobs:
               sudo systemctl stop submitty_autograding_shipper
 
           - name: Run autograding status test
-            uses: cypress-io/github-action@v2
+            uses: cypress-io/github-action@v4
             with:
               config: baseUrl=http://localhost
-              spec: cypress/integration/autograding_status_1.spec.js
+              spec: cypress/e2e/autograding_status_1.spec.js
               working-directory: ${{env.SUBMITTY_REPOSITORY}}/site
               browser: chrome
               headless: true
@@ -482,10 +509,10 @@ jobs:
               sudo systemctl restart submitty_autograding_shipper
 
           - name: Run autograding status test
-            uses: cypress-io/github-action@v2
+            uses: cypress-io/github-action@v4
             with:
               config: baseUrl=http://localhost
-              spec: cypress/integration/autograding_status_2.spec.js
+              spec: cypress/e2e/autograding_status_2.spec.js
               working-directory: ${{env.SUBMITTY_REPOSITORY}}/site
               browser: chrome
               headless: true
@@ -496,13 +523,42 @@ jobs:
               sudo systemctl restart submitty_autograding_worker
 
           - name: Switch to database auth
-            run:  sudo sed -ie "s/Pam/Database/g" ${SUBMITTY_INSTALL_DIR}/config/database.json
+            run:  sudo sed -ie "s/Pam/Database/g" ${SUBMITTY_INSTALL_DIR}/config/authentication.json
 
           - name: Run cypress e2e login tests with databse auth
-            uses: cypress-io/github-action@v2
+            uses: cypress-io/github-action@v4
             with:
               config: baseUrl=http://localhost
-              spec: cypress/integration/login.spec.js
+              spec: cypress/e2e/login.spec.js
+              working-directory: ${{env.SUBMITTY_REPOSITORY}}/site
+              browser: chrome
+              headless: true
+
+          - name: Switch to LDAP auth
+            run:  sudo sed -ie "s/Database/Ldap/g" ${SUBMITTY_INSTALL_DIR}/config/authentication.json
+
+          - name: Run cypress e2e login tests with LDAP auth
+            uses: cypress-io/github-action@v4
+            with:
+              config: baseUrl=http://localhost
+              spec: cypress/e2e/login.spec.js
+              working-directory: ${{env.SUBMITTY_REPOSITORY}}/site
+              browser: chrome
+              headless: true
+
+          - name: Setup SAML
+            run: |
+              cd $SUBMITTY_REPOSITORY
+              sudo -E env "PATH=$PATH" bash .setup/testing/setup_saml.sh
+
+          - name: Switch to SAML auth
+            run:  sudo sed -ie "s/Ldap/Saml/g" ${SUBMITTY_INSTALL_DIR}/config/authentication.json
+
+          - name: Run cypress e2e login tests with SAML auth
+            uses: cypress-io/github-action@v4
+            with:
+              config: baseUrl=http://localhost,chromeWebSecurity=false
+              spec: cypress/e2e/login.spec.js
               working-directory: ${{env.SUBMITTY_REPOSITORY}}/site
               browser: chrome
               headless: true
