@@ -59,11 +59,7 @@ def parse_args():
 
     return parser.parse_args()
 
-
-def main():
-    args = parse_args()
-    user_id = args.user_id
-
+def connect_db():
     conn_str = db_utils.generate_connect_string(
         DATABASE_HOST,
         DATABASE_PORT,
@@ -73,11 +69,21 @@ def main():
     )
 
     engine = create_engine(conn_str)
-    connection = engine.connect()
+    return engine, engine.connect()
+
+def get_user(user_id, engine, connection):
     metadata = MetaData(bind=engine)
     users_table = Table('users', metadata, autoload=True)
     select = users_table.select().where(users_table.c.user_id == bindparam('user_id'))
-    user = connection.execute(select, user_id=user_id).fetchone()
+    return users_table, connection.execute(select, user_id=user_id).fetchone()
+
+def main():
+    args = parse_args()
+    user_id = args.user_id
+
+    engine, connection = connect_db()
+    users_table, user = get_user(user_id, engine, connection)
+
     defaults = {
         'user_firstname': None,
         'user_preferred_firstname': None,
