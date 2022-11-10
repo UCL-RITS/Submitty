@@ -76,9 +76,10 @@ def remove_course_db(semester, course, skip_cleanup=False):
         cleanup_course_connections(semester, course)
 
     # delete the course database
-    postgres_cmd = "su postgres -c"
-    psql_cmd = f"-d postgres -c \"DROP DATABASE submitty_{semester}_{course};\""
-    cmd = f"{postgres_cmd} \\ {psql_cmd}"
+    postgres_cmd = f"su postgres -c"
+    sql_cmd = f"DROP DATABASE submitty_{semester}_{course};"
+    psql_cmd = f"-d postgres -c \\\"{sql_cmd}\\\""
+    cmd = f"{postgres_cmd} \"{psql_cmd}\""
     run = subprocess.run(shlex.split(cmd), capture_output=True)
     logging.info(f"Running command\n{cmd}")
     if run.returncode == 0:
@@ -93,9 +94,10 @@ def remove_references_from_master_db(semester, course):
     '''Removes references to the deleted course from all users and the master database
     '''
     # remove all references to the course from the master database
-    postgres_cmd = "su postgres -c"
-    psql_cmd = f"psql -d submitty -c \"DELETE FROM courses_users WHERE semester=\'{semester}\' AND course=\'{course}\'; DELETE FROM courses WHERE semester=\'{semester}\' AND course=\'{course}\';\""
-    cmd = f"{postgres_cmd} \\ {psql_cmd}"
+    postgres_cmd = f"su postgres -c"
+    sql_cmd = f"DELETE FROM courses_users WHERE semester=\'{semester}\' AND course=\'{course}\'; DELETE FROM courses WHERE semester=\'{semester}\' AND course=\'{course}\';"
+    psql_cmd = f"psql -d submitty -c \\\"{sql_cmd}\\\""
+    cmd = f"{postgres_cmd} \"{psql_cmd}\""
     run = subprocess.run(shlex.split(cmd), capture_output=True)
     logging.info(f"Running command\n{cmd}")
     if run.returncode == 0:
