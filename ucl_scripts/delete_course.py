@@ -1,17 +1,11 @@
 import logging
 import os
-import re
 import shlex
 import shutil
-import stat
-import string
 import subprocess
 import sys
-from warnings import warn
 from argparse import ArgumentParser
 from pathlib import Path
-
-import yaml
 
 from create_course import check_running_sudo, read_config_yaml
 
@@ -34,7 +28,6 @@ def delete_course_directory(semester, course, force_delete=False):
             # delete the course directory but throw a warning that it was not empty
             shutil.rmtree(course_dir)
             logging.warning(f"{course_dir} was not empty, but was force-deleted.")
-            warn(f"{course_dir} was not empty, but was force-deleted.")
         else:
             # request user confirmation to delete non-empty directory
             really_delete = input(f"{course_dir} is not empty. Confirm directory removal [yes/N]: ")
@@ -42,7 +35,6 @@ def delete_course_directory(semester, course, force_delete=False):
                 # actually delete
                 shutil.rmtree(course_dir)
                 logging.warning(f"{course_dir} was not empty, but was force-deleted.")
-                warn(f"{course_dir} was not empty, but was force-deleted.")
             else:
                 # don't delete, and terminate script
                 logging.error(f"{course_dir} non-empty, course deletion aborted.")
