@@ -7,6 +7,7 @@ import stat
 import string
 import subprocess
 import sys
+from warnings import warn
 from argparse import ArgumentParser
 from pathlib import Path
 
@@ -14,25 +15,91 @@ import yaml
 
 from create_course import check_running_sudo, read_config_yaml
 
-#sys.path.append('/usr/local/submitty/sbin/') # To be able to use what submitty has already
-sys.path.append('/home/ccaegra/Documents/submitty/Submitty/sbin')
-import adduser
+# To be able to use what submitty has already (abs path on submitty.cs.ucl.ac.uk is /usr/local/submitty/GIT_CHECKOUT/Submitty/sbin)
+this_files_location = os.path.abspath(__file__)
+submitty_sbin_dir = os.path.abspath(os.path.dirname(this_files_location) + '/../sbin')
+sys.path.append(submitty_sbin_dir)
 
-def delete_course_directory(semester, course):
+def delete_course_directory(semester, course, force_delete=False):
     '''Deletes the directory associated with a course, provided it currently exists
     '''
+    course_dir = Path(f'/var/local/submitty/courses/{semester}/{course}')
     if os.path.exists(course_dir):
-        # delete the course directory
-        course_dir = Path('/var/local/submitty/courses/<SEMESTER>/<COURSE>')
+        # course directory exists, but request user confirmation that we want to delete it if it is populated
+        is_empty = (len(os.listdir(course_dir)) == 0)
+        if is_empty:
+            # delete the course directory SILENTLY
+            os.rmdir(course_dir)
+            logging.info(f"Empty course directory {course_dir} was deleted.")
+        elif force_delete:
+            # delete the course directory but throw a warning that it was not empty
+            shutil.rmtree(course_dir)
+            logging.warning(f"{course_dir} was not empty, but was force-deleted.")
+            warn(f"{course_dir} was not empty, but was force-deleted.")
+        else:
+            # request user confirmation to delete non-empty directory
+            really_delete = input(f"{course_dir} is not empty. Confirm directory removal [yes/N]: ")
+            if really_delete.lowercase()=='yes':
+                # actually delete
+                shutil.rmtree(course_dir)
+                logging.warning(f"{course_dir} was not empty, but was force-deleted.")
+                warn(f"{course_dir} was not empty, but was force-deleted.")
+            else:
+                # don't delete, and terminate script
+                logging.error(f"{course_dir} non-empty, course deletion aborted.")
+                raise RuntimeError(f"{course_dir} non-empty, course deletion aborted.")
     else:
         # flag that its not there
-        pass
+        logging.info(f"Expected course directory {course_dir} does not exist, abort.")
+        raise RuntimeError(f"Expected course directory {course_dir} does not exist, abort.")
+    return
+
+def take_db_backup():
+    '''Takes a backup of the course database prior to deletion
+    '''
+    # These instructions don't actually exist on the submitty website yet:
+    # https://submitty.org/sysadmin/configuration/course_creation#clean-up-existing-course
+    # HELPFUL, but there's a placeholder function here in case we want to do it
+    return
+
+def cleanup_course_connections(semester, course):
+    '''Cleans up potentially hanging or old connections to the course database
+    '''
+    postgres_cmd = "su postgres"
+    psql_cmd = f"psql -d postgres -c \"SELECT *, pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND datname = 'submitty_{semester}_{course}';\""
+    cmd = f"{postgres_cmd} \\{psql_cmd}"
+    run = subprocess.run(shlex.split(cmd), capture_output=True)
+    logging.info(f"Running command\n{cmd}")
+    if run.returncode == 0:
+        # Command ran OK
+        logging.info(f"Successfully cleaned up connections")
+    else:
+        logging.error(f"Could not clean up database connections.")
+        raise RuntimeError(f"Could not clean up database connections.")
+    return
+
+def remove_course_db():
+    '''Removes the course database, potentially cleaning up connections first
+    '''
+        # sudo su postgres
+    # psql -d postgres -c "DROP DATABASE submitty_<SEMESTER>_<COURSE>;"
+    # !!!! but it may be necessary to first clean up connections
+    # sudo su postgres
+    # psql -d postgres -c "SELECT *, pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND datname = 'submitty_<SEMESTER>_<COURSE>';"
+    return
+
+def remove_references_from_master_db():
+    '''Removes references to the deleted course from all users and the master database
+    '''
+    # sudo su postgres
+    # psql -d submitty -c "DELETE FROM courses_users WHERE semester='<SEMESTER>' AND course='<COURSE>'; DELETE FROM courses WHERE semester='<SEMESTER>' AND course='<COURSE>';"
     return
 
 def main():
     parser = ArgumentParser(description="Deletes a course on Submitty created via the create_course.py script, and disassociates the course from existing Submitty users")
     parser.add_argument('inputfile', help="Input yaml file to create_course.py.")
     parser.add_argument('-rm', '--remove-directory', dest='dir_delete_bool', action='store_true', help="Delete course directory in addition to database.")
+    parser.add_argument('-f', '--force-delete', dest='force_delete_flag', action='store_true', help='Forces deletion of course directory, hanging user accounts, etc, without requiring user confirmation.')
     args = parser.parse_args()
 
     # read the original input file to obtain the course name and semester
@@ -41,21 +108,20 @@ def main():
     course_semester = course_properties["semester"]
     course_name = course_properties["course"]
     
-    # if desired, delete the course directory
+    # if desired, attempt to delete the course directory
     if args.dir_delete_bool:
-        delete_course_directory(course_semester, course_name)
-        #rm /var/local/submitty/courses/<SEMESTER>/<COURSE>
+        delete_course_directory(course_semester, course_name, args.force_delete_flag)
 
-    # Remove course database
-    # sudo su postgres
-    # psql -d postgres -c "DROP DATABASE submitty_<SEMESTER>_<COURSE>;"
-    # !!!! but it may be necessary to first clean up connections
-    # sudo su postgres
-    # psql -d postgres -c "SELECT *, pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND datname = 'submitty_<SEMESTER>_<COURSE>';"
+    # if desired, take database backup before deletion 
+    # [CURRENTLY NOT SUPPORTED] Add argument to ArgumentParser when Submitty docs updated
+    if False:
+        take_db_backup()
+    
+    # remove course database
+    remove_course_db()
 
-    # remove the course and the association from all users to [of?] the course from the master database
-    # sudo su postgres
-    # psql -d submitty -c "DELETE FROM courses_users WHERE semester='<SEMESTER>' AND course='<COURSE>'; DELETE FROM courses WHERE semester='<SEMESTER>' AND course='<COURSE>';"
+    # remove the course, and the association from all users to the course, from the master database
+    remove_references_from_master_db()
 
     return
 
