@@ -12,9 +12,8 @@ from pathlib import Path
 
 import yaml
 
-# To be able to use what submitty has already (abs path on submitty.cs.ucl.ac.uk is /usr/local/submitty/GIT_CHECKOUT/Submitty/sbin)
-this_files_location = os.path.abspath(__file__)
-submitty_sbin_dir = os.path.abspath(os.path.dirname(this_files_location) + '/../sbin')
+# To be able to use what submitty has already (abs path on submitty.cs.ucl.ac.uk is /usr/local/submitty/sbin)
+submitty_sbin_dir = '/usr/local/submitty/sbin/'
 sys.path.append(submitty_sbin_dir)
 import adduser
 

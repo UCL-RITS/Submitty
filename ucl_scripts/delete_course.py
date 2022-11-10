@@ -15,9 +15,8 @@ import yaml
 
 from create_course import check_running_sudo, read_config_yaml
 
-# To be able to use what submitty has already (abs path on submitty.cs.ucl.ac.uk is /usr/local/submitty/GIT_CHECKOUT/Submitty/sbin)
-this_files_location = os.path.abspath(__file__)
-submitty_sbin_dir = os.path.abspath(os.path.dirname(this_files_location) + '/../sbin')
+# To be able to use what submitty has already (abs path on submitty.cs.ucl.ac.uk is /usr/local/submitty/sbin)
+submitty_sbin_dir = '/usr/local/submitty/sbin/'
 sys.path.append(submitty_sbin_dir)
 
 def delete_course_directory(semester, course, force_delete=False):
@@ -66,7 +65,7 @@ def cleanup_course_connections(semester, course):
     '''Cleans up potentially hanging or old connections to the course database
     '''
     postgres_cmd = "su postgres"
-    psql_cmd = f"psql -d postgres -c \"SELECT *, pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND datname = 'submitty_{semester}_{course}';\""
+    psql_cmd = f"psql -d postgres -c \"SELECT *, pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND datname = \'submitty_{semester}_{course}\';\""
     cmd = f"{postgres_cmd} \\{psql_cmd}"
     run = subprocess.run(shlex.split(cmd), capture_output=True)
     logging.info(f"Running command\n{cmd}")
@@ -78,28 +77,50 @@ def cleanup_course_connections(semester, course):
         raise RuntimeError(f"Could not clean up database connections.")
     return
 
-def remove_course_db():
+def remove_course_db(semester, course, skip_cleanup=False):
     '''Removes the course database, potentially cleaning up connections first
     '''
-        # sudo su postgres
-    # psql -d postgres -c "DROP DATABASE submitty_<SEMESTER>_<COURSE>;"
-    # !!!! but it may be necessary to first clean up connections
-    # sudo su postgres
-    # psql -d postgres -c "SELECT *, pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND datname = 'submitty_<SEMESTER>_<COURSE>';"
+    # attempt to clean up database connections if desired
+    if not skip_cleanup:
+        cleanup_course_connections(semester, course)
+
+    # delete the course database
+    postgres_cmd = "su postgres"
+    psql_cmd = f"-d postgres -c \"DROP DATABASE submitty_{semester}_{course};\""
+    cmd = f"{postgres_cmd} \\{psql_cmd}"
+    run = subprocess.run(shlex.split(cmd), capture_output=True)
+    logging.info(f"Running command\n{cmd}")
+    if run.returncode == 0:
+        # Command ran OK
+        logging.info(f"Successfully deleted database submitty_{semester}_{course}")
+    else:
+        logging.error(f"Could not delete database submitty_{semester}_{course}")
+        raise RuntimeError(f"Could not delete database submitty_{semester}_{course}")
     return
 
-def remove_references_from_master_db():
+def remove_references_from_master_db(semester, course):
     '''Removes references to the deleted course from all users and the master database
     '''
-    # sudo su postgres
-    # psql -d submitty -c "DELETE FROM courses_users WHERE semester='<SEMESTER>' AND course='<COURSE>'; DELETE FROM courses WHERE semester='<SEMESTER>' AND course='<COURSE>';"
+    # remove all references to the course from the master database
+    postgres_cmd = "su postgres"
+    psql_cmd = f"psql -d submitty -c \"DELETE FROM courses_users WHERE semester=\'{semester}\' AND course=\'{course}\'; DELETE FROM courses WHERE semester=\'{semester}\' AND course=\'{course}\';\""
+    cmd = f"{postgres_cmd} \\{psql_cmd}"
+    run = subprocess.run(shlex.split(cmd), capture_output=True)
+    logging.info(f"Running command\n{cmd}")
+    if run.returncode == 0:
+        # Command ran OK
+        logging.info(f"Successfully removed all associations to the course from the master database")
+    else:
+        logging.error(f"Could not remove associations from the master database")
+        raise RuntimeError(f"Could not remove associations from the master database")
     return
 
 def main():
-    parser = ArgumentParser(description="Deletes a course on Submitty created via the create_course.py script, and disassociates the course from existing Submitty users")
+    parser = ArgumentParser(description="Deletes a course on Submitty created via the create_course.py script, and disassociates the course from existing Submitty users.")
     parser.add_argument('inputfile', help="Input yaml file to create_course.py.")
     parser.add_argument('-rm', '--remove-directory', dest='dir_delete_bool', action='store_true', help="Delete course directory in addition to database.")
     parser.add_argument('-f', '--force-delete', dest='force_delete_flag', action='store_true', help='Forces deletion of course directory, hanging user accounts, etc, without requiring user confirmation.')
+    parser.add_argument('-s', '--skip-connection-cleanup', dest='connection_cleanup_flag', action='store_true', help='Skips the connection cleanup when removing course databases.')
     args = parser.parse_args()
 
     # read the original input file to obtain the course name and semester
@@ -118,10 +139,10 @@ def main():
         take_db_backup()
     
     # remove course database
-    remove_course_db()
+    remove_course_db(course_semester, course_name, args.connection_cleanup_flag)
 
     # remove the course, and the association from all users to the course, from the master database
-    remove_references_from_master_db()
+    remove_references_from_master_db(course_semester, course_name)
 
     return
 
