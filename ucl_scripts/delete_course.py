@@ -3,15 +3,14 @@ import os
 import shlex
 import shutil
 import subprocess
-import sys
 from argparse import ArgumentParser
 from pathlib import Path
 
 from create_course import check_running_sudo, read_config_yaml
 
 # To be able to use what submitty has already (abs path on submitty.cs.ucl.ac.uk is /usr/local/submitty/sbin)
-submitty_sbin_dir = '/usr/local/submitty/sbin/'
-sys.path.append(submitty_sbin_dir)
+# submitty_sbin_dir = '/usr/local/submitty/sbin/'
+# sys.path.append(submitty_sbin_dir)
 
 def delete_course_directory(semester, course, force_delete=False):
     '''Deletes the directory associated with a course, provided it currently exists
@@ -58,7 +57,7 @@ def cleanup_course_connections(semester, course):
     '''
     postgres_cmd = "su postgres"
     psql_cmd = f"psql -d postgres -c \"SELECT *, pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND datname = \'submitty_{semester}_{course}\';\""
-    cmd = f"{postgres_cmd} \\{psql_cmd}"
+    cmd = f"{postgres_cmd} \\ {psql_cmd}"
     run = subprocess.run(shlex.split(cmd), capture_output=True)
     logging.info(f"Running command\n{cmd}")
     if run.returncode == 0:
@@ -79,7 +78,7 @@ def remove_course_db(semester, course, skip_cleanup=False):
     # delete the course database
     postgres_cmd = "su postgres"
     psql_cmd = f"-d postgres -c \"DROP DATABASE submitty_{semester}_{course};\""
-    cmd = f"{postgres_cmd} \\{psql_cmd}"
+    cmd = f"{postgres_cmd} \\ {psql_cmd}"
     run = subprocess.run(shlex.split(cmd), capture_output=True)
     logging.info(f"Running command\n{cmd}")
     if run.returncode == 0:
@@ -96,7 +95,7 @@ def remove_references_from_master_db(semester, course):
     # remove all references to the course from the master database
     postgres_cmd = "su postgres"
     psql_cmd = f"psql -d submitty -c \"DELETE FROM courses_users WHERE semester=\'{semester}\' AND course=\'{course}\'; DELETE FROM courses WHERE semester=\'{semester}\' AND course=\'{course}\';\""
-    cmd = f"{postgres_cmd} \\{psql_cmd}"
+    cmd = f"{postgres_cmd} \\ {psql_cmd}"
     run = subprocess.run(shlex.split(cmd), capture_output=True)
     logging.info(f"Running command\n{cmd}")
     if run.returncode == 0:
