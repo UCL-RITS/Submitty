@@ -77,12 +77,17 @@ class Container():
             '/usr/local/submitty/grading_bin': {
                 'bind': '/usr/local/submitty/grading_bin',
                 'mode': 'ro'
-            }
+            },
+            # Adding a pip cache
+            '/cache/pip': {
+                'bind': '/pip_cache',
+                'mode': 'rw'
+            },
         }
 
         network_details = {
-            'network': None if self.internet else 'none',
-            'network_mode': 'host' if self.internet else None,
+            'network': None, # if self.internet else 'none',
+            'network_mode': 'host', # if self.internet else None,
 
         }
 
@@ -122,6 +127,12 @@ class Container():
                     hostname=self.name,
                     name=self.full_name
                 )
+                self.log_function(
+                    f'{dateutils.get_current_time()} docker container '
+                    f'{self.container.short_id} created from '
+                    f'{self.image} image'
+                )
+
         except docker.errors.ImageNotFound:
             self.log_docker_error('image is not available')
             self.log_function(f'ERROR: The image {self.image} is not available on this worker')
@@ -139,7 +150,7 @@ class Container():
             self.container.short_id,
             timer() - container_create_time
         )
-        self.log_meta('USING network', str(network_details['network_mode']), self.container.short_id, timer() - container_create_time)
+        self.log_container('USING network', str(network_details['network_mode']), self.container.short_id, timer() - container_create_time)
         client.close()
 
     def log_docker_error(self, message):

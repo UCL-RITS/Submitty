@@ -319,8 +319,9 @@ void allow_system_calls(scmp_filter_ctx sc, const std::set<std::string> &categor
   ALLOW_SYSCALL(utime, "SAFELIST:INFORMATION_MAINTENANCE");
   ALLOW_SYSCALL(utimensat, "SAFELIST:INFORMATION_MAINTENANCE");
   ALLOW_SYSCALL(utimes, "SAFELIST:INFORMATION_MAINTENANCE");
-#ifdef __NR_getrandom
   ALLOW_SYSCALL(getrandom, "SAFELIST:INFORMATION_MAINTENANCE");
+#ifdef __NR_getrandom
+  // Moved outside this if as I don't know where the __NR__getrandom gets defined
 #endif
   ALLOW_SYSCALL(sysinfo, "SAFELIST:INFORMATION_MAINTENANCE");
 
